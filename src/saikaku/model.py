@@ -23,6 +23,18 @@ class GameState:
     batter_quality: float = 0.0
     pitcher_quality: float = 0.0
 
+    def __post_init__(self) -> None:
+        if self.inning < 1:
+            raise ValueError("inning must be at least 1")
+        if self.half not in {"top", "bottom"}:
+            raise ValueError("half must be 'top' or 'bottom'")
+        if self.outs not in {0, 1, 2}:
+            raise ValueError("outs must be 0, 1, or 2")
+        if self.home_score < 0 or self.away_score < 0:
+            raise ValueError("scores must not be negative")
+        if len(self.runners) != 3 or not all(isinstance(runner, bool) for runner in self.runners):
+            raise ValueError("runners must contain three boolean base flags")
+
     @property
     def run_diff(self) -> int:
         return self.home_score - self.away_score
