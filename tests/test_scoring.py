@@ -44,7 +44,8 @@ def test_scoring_compares_observed_action_with_alternative():
     [
         {"inning": 0},
         {"half": "middle"},
-        {"outs": 3},
+        {"outs": 4},
+        {"outs": -1},
         {"home_score": -1},
         {"runners": (True, False)},
     ],
@@ -59,3 +60,31 @@ def test_game_state_accepts_valid_boundary_values():
 
     assert valid.inning == 1
     assert valid.outs == 2
+
+
+def test_third_out_is_a_valid_state_because_source_data_records_it():
+    ended = state(outs=3)
+
+    assert ended.half_inning_is_over
+    assert not state(outs=2).half_inning_is_over
+
+
+def test_next_half_inning_hands_the_bat_to_the_other_team():
+    after_top = state(inning=7, half="top", outs=3).next_half_inning()
+
+    assert (after_top.inning, after_top.half) == (7, "bottom")
+    assert after_top.outs == 0
+    assert after_top.runners == (False, False, False)
+
+    after_bottom = state(inning=7, half="bottom", outs=3).next_half_inning()
+
+    assert (after_bottom.inning, after_bottom.half) == (8, "top")
+
+
+def test_third_out_is_valued_as_the_complement_of_the_opponents_position():
+    model = WinProbabilityModel()
+    ended = state(inning=7, half="top", outs=3)
+
+    assert model.probability(ended) == pytest.approx(
+        1.0 - model.probability(ended.next_half_inning())
+    )

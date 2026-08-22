@@ -28,8 +28,8 @@ class GameState:
             raise ValueError("inning must be at least 1")
         if self.half not in {"top", "bottom"}:
             raise ValueError("half must be 'top' or 'bottom'")
-        if self.outs not in {0, 1, 2}:
-            raise ValueError("outs must be 0, 1, or 2")
+        if self.outs not in {0, 1, 2, 3}:
+            raise ValueError("outs must be 0, 1, 2, or 3")
         if self.home_score < 0 or self.away_score < 0:
             raise ValueError("scores must not be negative")
         if len(self.runners) != 3 or not all(isinstance(runner, bool) for runner in self.runners):
@@ -52,6 +52,29 @@ class GameState:
             return replace(self, home_score=self.home_score + batting_team_runs)
         return replace(self, away_score=self.away_score + batting_team_runs)
 
+    @property
+    def half_inning_is_over(self) -> bool:
+        """True once the third out is recorded, when no one is batting."""
+
+        return self.outs == 3
+
+    def next_half_inning(self) -> "GameState":
+        """Return the state starting the next half inning.
+
+        The batting team changes, so a probability computed for the returned
+        state belongs to the opponent of the team that was batting here.
+        """
+
+        if self.half == "top":
+            return replace(self, half="bottom", outs=0, runners=(False, False, False))
+        return replace(
+            self,
+            inning=self.inning + 1,
+            half="top",
+            outs=0,
+            runners=(False, False, False),
+        )
+
 
 class WinProbabilityModel:
     """Estimate win probability for the team currently batting.
@@ -61,6 +84,10 @@ class WinProbabilityModel:
     """
 
     def probability(self, state: GameState) -> float:
+        if state.half_inning_is_over:
+            # Nobody is batting on the third out. The state is worth exactly the
+            # complement of the opponent's position leading off the next half.
+            return 1.0 - self.probability(state.next_half_inning())
         innings_remaining = max(0.25, 9.5 - state.inning)
         score_term = 0.42 * state.batting_team_run_diff
         inning_term = 0.08 * (state.inning - 5)
