@@ -1,13 +1,27 @@
-"""A transparent baseline model for in-game win probability.
+"""In-game win probability from the run distribution and NPB game rules.
 
-The model is deliberately small and inspectable. It is a starting point for
-replacing the coefficients with estimates learned from historical game data.
+Every half inning draws its runs from :class:`~saikaku.runs.RunDistribution`,
+and the rules decide what happens between half innings: the home team skips
+the bottom of the ninth when leading, a walk-off ends the game at once, and an
+NPB regular-season game still tied after the twelfth is a draw.
+
+Both teams are treated as league average. Batter, pitcher and venue effects are
+deliberately absent until they can be estimated rather than guessed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import exp
+from functools import cache
+from pathlib import Path
+
+from .runs import RunDistribution, base_index
+
+#: The fitted distribution ships with the package once it has been built.
+DEFAULT_RUN_DISTRIBUTION = Path(__file__).with_name("data") / "run_distribution.json"
+
+#: Score margins beyond this are treated as this; they are decided games.
+_MAX_MARGIN = 30
 
 
 @dataclass(frozen=True)
@@ -20,8 +34,6 @@ class GameState:
     home_score: int
     away_score: int
     runners: tuple[bool, bool, bool] = (False, False, False)
-    batter_quality: float = 0.0
-    pitcher_quality: float = 0.0
 
     def __post_init__(self) -> None:
         if self.inning < 1:
@@ -42,15 +54,6 @@ class GameState:
     @property
     def batting_team_is_home(self) -> bool:
         return self.half == "bottom"
-
-    @property
-    def batting_team_run_diff(self) -> int:
-        return self.run_diff if self.batting_team_is_home else -self.run_diff
-
-    def with_scores(self, batting_team_runs: int) -> "GameState":
-        if self.batting_team_is_home:
-            return replace(self, home_score=self.home_score + batting_team_runs)
-        return replace(self, away_score=self.away_score + batting_team_runs)
 
     @property
     def half_inning_is_over(self) -> bool:
@@ -76,31 +79,120 @@ class GameState:
         )
 
 
-class WinProbabilityModel:
-    """Estimate win probability for the team currently batting.
+@dataclass(frozen=True)
+class GameRules:
+    regulation_innings: int = 9
+    #: The last inning played before a tie stands. NPB's regular season stops at 12.
+    max_innings: int = 12
+    #: What a draw is worth. NPB excludes ties from winning percentage, so half.
+    tie_value: float = 0.5
 
-    This is a baseline, not a claim about the true probabilities. Production
-    use should fit the parameters by season, venue, league, and game state.
-    """
+
+NPB_RULES = GameRules()
+
+
+@dataclass(frozen=True)
+class Outcome:
+    home_win: float
+    tie: float
+
+    @property
+    def away_win(self) -> float:
+        return 1.0 - self.home_win - self.tie
+
+    def __add__(self, other: "Outcome") -> "Outcome":
+        return Outcome(self.home_win + other.home_win, self.tie + other.tie)
+
+    def scaled(self, p: float) -> "Outcome":
+        return Outcome(self.home_win * p, self.tie * p)
+
+
+_HOME_WINS = Outcome(1.0, 0.0)
+_AWAY_WINS = Outcome(0.0, 0.0)
+_TIE = Outcome(0.0, 1.0)
+
+
+class WinProbabilityModel:
+    """Win probability for the team currently batting."""
+
+    def __init__(self, runs: RunDistribution, rules: GameRules = NPB_RULES) -> None:
+        self.runs = runs
+        self.rules = rules
+        self._start = cache(self._start_of_half)
+
+    @classmethod
+    def load_default(cls) -> "WinProbabilityModel":
+        if not DEFAULT_RUN_DISTRIBUTION.exists():
+            raise FileNotFoundError(
+                f"{DEFAULT_RUN_DISTRIBUTION} is missing; build it with python -m saikaku.fit"
+            )
+        return cls(RunDistribution.load(DEFAULT_RUN_DISTRIBUTION))
+
+    def outcome(self, state: GameState) -> Outcome:
+        diff = _clamp(state.run_diff)
+        if (
+            state.half == "bottom"
+            and state.inning >= self.rules.regulation_innings
+            and diff > 0
+        ):
+            return _HOME_WINS
+        return self._play_out(
+            state.inning, state.half, state.outs, base_index(state.runners), diff
+        )
 
     def probability(self, state: GameState) -> float:
-        if state.half_inning_is_over:
-            # Nobody is batting on the third out. The state is worth exactly the
-            # complement of the opponent's position leading off the next half.
-            return 1.0 - self.probability(state.next_half_inning())
-        innings_remaining = max(0.25, 9.5 - state.inning)
-        score_term = 0.42 * state.batting_team_run_diff
-        inning_term = 0.08 * (state.inning - 5)
-        batter_term = 0.18 * state.batter_quality
-        pitcher_term = -0.18 * state.pitcher_quality
-        base_term = 0.23 * sum(state.runners)
-        out_term = -0.31 * state.outs
-        late_term = 0.22 if state.batting_team_is_home and state.inning >= 9 else 0.0
-        linear = (score_term + inning_term + batter_term + pitcher_term +
-                  base_term + out_term + late_term) / innings_remaining
-        return 1.0 / (1.0 + exp(-linear))
+        result = self.outcome(state)
+        tie_share = self.rules.tie_value * result.tie
+        if state.batting_team_is_home:
+            return result.home_win + tie_share
+        return result.away_win + tie_share
 
     def action_value(self, before: GameState, after: GameState) -> float:
-        """Return win-probability change in percentage points."""
+        """Return the batting team's win-probability change in percentage points.
 
-        return (self.probability(after) - self.probability(before)) * 100
+        ``after`` may belong to the next half inning; the change is still
+        measured for the team that was batting in ``before``.
+        """
+
+        after_value = self.probability(after)
+        if after.batting_team_is_home != before.batting_team_is_home:
+            after_value = 1.0 - after_value
+        return (after_value - self.probability(before)) * 100
+
+    def _play_out(self, inning: int, half: str, outs: int, bases: int, diff: int) -> Outcome:
+        """Finish the current half inning from a base-out state, then the game."""
+
+        walk_off_possible = half == "bottom" and inning >= self.rules.regulation_innings
+        total = Outcome(0.0, 0.0)
+        for runs, p in enumerate(self.runs.remaining(outs, bases)):
+            if p == 0.0:
+                continue
+            new_diff = _clamp(diff + runs if half == "bottom" else diff - runs)
+            if walk_off_possible and new_diff > 0:
+                result = _HOME_WINS
+            else:
+                result = self._after_half(inning, half, new_diff)
+            total = total + result.scaled(p)
+        return total
+
+    def _after_half(self, inning: int, half: str, diff: int) -> Outcome:
+        rules = self.rules
+        if half == "top":
+            if inning >= rules.regulation_innings and diff > 0:
+                return _HOME_WINS
+            return self._start(inning, "bottom", diff)
+        if inning >= rules.regulation_innings:
+            if diff > 0:
+                return _HOME_WINS
+            if diff < 0:
+                return _AWAY_WINS
+            if inning >= rules.max_innings:
+                return _TIE
+        return self._start(inning + 1, "top", diff)
+
+    def _start_of_half(self, inning: int, half: str, diff: int) -> Outcome:
+        return self._play_out(inning, half, 0, 0, diff)
+
+
+def _clamp(diff: int) -> int:
+    return max(-_MAX_MARGIN, min(_MAX_MARGIN, diff))

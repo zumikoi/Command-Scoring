@@ -11,8 +11,9 @@ build/
 !.env.example
 .vscode/
 
-# ライセンスを受けた試合データは決してコミットしない。
-# 契約上の再配布制限に触れるため、取得したCSVはこの配下に置く。
-data/
+# 生データはコミットしない（Vault外の %LOCALAPPDATA%\Saikaku に置く）。
+# 派生した src/saikaku/data/*.json はコミットする。
+/data/
 *.csv
+*.zip
 !tests/**/*.csv

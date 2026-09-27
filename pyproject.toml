@@ -8,5 +8,10 @@ version = "0.1.0"
 description = "Data-driven scoring of NPB in-game decisions"
 requires-python = ">=3.11"
 
+[tool.setuptools.package-data]
+saikaku = ["data/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+# Vault（OneDrive同期）にキャッシュを作らない
+addopts = "-p no:cacheprovider"

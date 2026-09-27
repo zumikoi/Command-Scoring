@@ -35,7 +35,7 @@ def load_decision(path: Path) -> Decision:
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: python -m saikaku.cli samples/decision.json")
-    scored = score_decision(load_decision(Path(sys.argv[1])), WinProbabilityModel())
+    scored = score_decision(load_decision(Path(sys.argv[1])), WinProbabilityModel.load_default())
     print(format_post(scored))
     print(json.dumps(asdict(scored), ensure_ascii=False, default=str, indent=2))
 
