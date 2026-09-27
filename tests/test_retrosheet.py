@@ -40,6 +40,14 @@ def test_reads_every_csv_inside_a_zip(tmp_path):
     assert len(list(read_transitions(zip_path))) == 3
 
 
+def test_only_regular_season_games_are_read(tmp_path):
+    header = HEADER + ",gametype"
+    rows = [ROWS[0] + ",regular", ROWS[1] + ",worldseries"]
+    path = write_csv(tmp_path / "2024plays.csv", rows=rows, header=header)
+
+    assert list(read_transitions(path)) == [Transition(0, 0, 0, 1, 0)]
+
+
 def test_missing_column_is_an_error(tmp_path):
     path = write_csv(tmp_path / "bad.csv", header=HEADER.replace(",runs", ",rbi"))
 

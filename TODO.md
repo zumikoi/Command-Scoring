@@ -16,7 +16,7 @@
 - [x] 走者×アウトのマルコフ連鎖による得点分布（[runs.py](src/saikaku/runs.py)）
 - [x] NPBルール（12回打ち切り・引き分け・サヨナラ）込みの勝率モデル（[model.py](src/saikaku/model.py)）
 - [x] Retrosheetの読み込みと分布の作成コマンド（[retrosheet.py](src/saikaku/retrosheet.py)、[fit.py](src/saikaku/fit.py)）
-- [ ] Retrosheetのデータで得点分布を作り、`src/saikaku/data/run_distribution.json` をコミットする
+- [x] 2022〜2024年のRetrosheet公式戦（56.7万遷移）で得点分布を作成（`src/saikaku/data/run_distribution.json`）
 - [ ] 代替案の自動評価：送りバント・盗塁・敬遠の結果の分布をRetrosheetから推定し、代替案の期待勝率を計算する。現状は代替案の直後の局面を手書きしている
 - [ ] 観戦記録の入力形式を決める（1試合1ファイル、Obsidianで書ける形）
 - [ ] 試合ごとのレポートをObsidianのノートとして出力する

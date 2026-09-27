@@ -62,6 +62,10 @@ def _read_csv(handle: TextIO) -> Iterator[Transition]:
     if missing:
         raise SchemaError(f"missing required columns: {', '.join(missing)}")
     for row in reader:
+        # Postseason and All-Star games are played differently; keep the
+        # regular season only when the file says which is which.
+        if row.get("gametype", "regular") != "regular":
+            continue
         outs_pre = int(row["outs_pre"])
         if outs_pre >= 3:
             continue
