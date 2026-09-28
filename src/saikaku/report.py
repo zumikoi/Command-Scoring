@@ -1,26 +1,30 @@
-"""Post-game report formatting for X and longer-form dashboards."""
+"""Plain-text formatting of scored decisions."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 from .decisions import ScoredDecision
+from .tactics import TACTIC_NAMES
 
 
-def format_post(scored: ScoredDecision) -> str:
+def format_decision(scored: ScoredDecision) -> str:
     item = scored.decision
-    sign = "+" if scored.decision_cost >= 0 else ""
-    return (
-        f"{item.team} {item.game_id}｜{item.decision_type}「{item.description}」\n"
-        f"勝率変化 {scored.observed_change:+.2f}pt｜"
-        f"代替案「{item.best_alternative}」との差 {sign}{scored.decision_cost:.2f}pt\n"
-        f"判定 {scored.grade}｜結果ではなく、意思決定時点の情報だけで評価"
-    )
+    ev = scored.evaluation
+    lines = [
+        f"{item.team} {item.game_id}｜{item.decision_type}「{item.description}」",
+        f"判断: {TACTIC_NAMES[ev.chosen]} {ev.chosen_probability:.1%} vs "
+        f"{TACTIC_NAMES[ev.alternative]} {ev.alternative_probability:.1%} "
+        f"→ {ev.value:+.1f}pt（{scored.verdict}）",
+    ]
+    if scored.result_change is not None:
+        lines.append(f"結果: 勝率 {scored.result_change:+.1f}pt（評価には使わない）")
+    return "\n".join(lines)
 
 
 def format_game_summary(items: Iterable[ScoredDecision]) -> str:
     scored = list(items)
     if not scored:
         return "采配評価対象なし"
-    total = sum(item.decision_cost for item in scored)
-    return f"采配評価 {len(scored)}件｜累積推定差 {total:+.2f}pt"
+    total = sum(item.evaluation.value for item in scored)
+    return f"采配評価 {len(scored)}件｜判断による勝率の増減 合計 {total:+.1f}pt"

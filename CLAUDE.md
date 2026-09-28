@@ -20,8 +20,10 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 | `src/saikaku/runs.py` | 状態遷移の集計と、半イニングの残り得点分布（マルコフ連鎖） |
 | `src/saikaku/model.py` | `GameState`、NPBルールの勝率モデル |
 | `src/saikaku/retrosheet.py` | Retrosheet `<年>plays.zip` の読み込み |
-| `src/saikaku/fit.py` | 得点分布を作り `src/saikaku/data/run_distribution.json` に書き出す |
-| `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示（代替案はまだ手書き） |
+| `src/saikaku/fit.py` | `src/saikaku/data/` の `run_distribution.json` と `tactics.json` を作る |
+| `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）と、選んだ作戦と代替案の比較 |
+| `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示 |
+| `src/saikaku/demo.py`, `demo_template.html` | 全場面を事前計算した単一HTMLのデモ（`demo/` は生成物で git 対象外） |
 
 ## データの置き場所
 
@@ -36,6 +38,7 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 $env:PYTHONPATH = "src"
 python -m saikaku.fit "$env:LOCALAPPDATA\Saikaku\retrosheet\2024plays.zip"
 python -m saikaku.cli samples/decision.json
+python -m saikaku.demo   # プレビューは .claude/launch.json の demo
 python -m pytest
 ```
 

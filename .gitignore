@@ -17,3 +17,6 @@ build/
 *.csv
 *.zip
 !tests/**/*.csv
+
+# 生成物（python -m saikaku.demo）
+/demo/

@@ -26,18 +26,5 @@
       true,
       false
     ]
-  },
-  "best_alternative": "通常打撃",
-  "alternative_after": {
-    "inning": 7,
-    "half": "top",
-    "outs": 0,
-    "home_score": 3,
-    "away_score": 3,
-    "runners": [
-      true,
-      false,
-      false
-    ]
   }
 }

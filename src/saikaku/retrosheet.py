@@ -1,4 +1,4 @@
-"""Read base-out transitions from Retrosheet's parsed play-by-play files.
+"""Read plays from Retrosheet's parsed play-by-play files.
 
 The files are the per-season ``<year>plays.zip`` downloads listed at
 https://www.retrosheet.org/downloads/plays.html. Retrosheet permits any use on
@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, TextIO
 
@@ -37,9 +38,29 @@ REQUIRED_COLUMNS = (
     "runs",
 )
 
+#: Pitch codes for a bunt attempt: ``L`` is a foul bunt, ``M`` a missed one.
+_BUNT_PITCHES = frozenset("LM")
+
 
 class SchemaError(ValueError):
     """Raised when a file does not have the columns this reader relies on."""
+
+
+@dataclass(frozen=True)
+class Play:
+    """One play record with the flags that identify a manager's tactic.
+
+    Flag columns missing from a file read as false, so a file with only the
+    required columns still yields every transition.
+    """
+
+    transition: Transition
+    plate_appearance: bool = False
+    #: A bunt in play, or a strikeout on a foul or missed bunt.
+    bunt_attempt: bool = False
+    intentional_walk: bool = False
+    #: The base a lone steal attempt targeted (2 or 3), made between pitches.
+    steal_target: int | None = None
 
 
 def _occupied(value: str) -> bool:
@@ -56,7 +77,52 @@ def _bases(row: dict[str, str], suffix: str) -> int:
     )
 
 
-def _read_csv(handle: TextIO) -> Iterator[Transition]:
+def _flag(row: dict[str, str], column: str) -> bool:
+    return row.get(column, "").strip() == "1"
+
+
+def _steal_target(row: dict[str, str]) -> int | None:
+    """Return the base of a single steal attempt that was the whole play.
+
+    Steals folded into a plate appearance (a strikeout with a stolen base) and
+    double steals are excluded; neither isolates the decision to run.
+    """
+
+    if _flag(row, "pa"):
+        return None
+    targets = {
+        base
+        for base, columns in ((2, ("sb2", "cs2")), (3, ("sb3", "cs3")), (4, ("sbh", "csh")))
+        if any(_flag(row, column) for column in columns)
+    }
+    if len(targets) != 1:
+        return None
+    (target,) = targets
+    return target if target in (2, 3) else None
+
+
+def _to_play(row: dict[str, str]) -> Play:
+    plate_appearance = _flag(row, "pa")
+    bunt_attempt = plate_appearance and (
+        _flag(row, "bunt")
+        or (_flag(row, "k") and row.get("pitches", "")[-1:] in _BUNT_PITCHES)
+    )
+    return Play(
+        transition=Transition(
+            outs_pre=int(row["outs_pre"]),
+            bases_pre=_bases(row, "pre"),
+            outs_post=int(row["outs_post"]),
+            bases_post=_bases(row, "post"),
+            runs=int(row["runs"] or 0),
+        ),
+        plate_appearance=plate_appearance,
+        bunt_attempt=bunt_attempt,
+        intentional_walk=_flag(row, "iw"),
+        steal_target=_steal_target(row),
+    )
+
+
+def _read_csv(handle: TextIO) -> Iterator[Play]:
     reader = csv.DictReader(handle)
     missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or ())]
     if missing:
@@ -66,20 +132,13 @@ def _read_csv(handle: TextIO) -> Iterator[Transition]:
         # regular season only when the file says which is which.
         if row.get("gametype", "regular") != "regular":
             continue
-        outs_pre = int(row["outs_pre"])
-        if outs_pre >= 3:
+        if int(row["outs_pre"]) >= 3:
             continue
-        yield Transition(
-            outs_pre=outs_pre,
-            bases_pre=_bases(row, "pre"),
-            outs_post=int(row["outs_post"]),
-            bases_post=_bases(row, "post"),
-            runs=int(row["runs"] or 0),
-        )
+        yield _to_play(row)
 
 
-def read_transitions(path: str | Path) -> Iterator[Transition]:
-    """Yield transitions from a plays CSV, or from every CSV inside a zip."""
+def read_plays(path: str | Path) -> Iterator[Play]:
+    """Yield plays from a plays CSV, or from every CSV inside a zip."""
 
     path = Path(path)
     if path.suffix.lower() == ".zip":
@@ -93,6 +152,10 @@ def read_transitions(path: str | Path) -> Iterator[Transition]:
         yield from _read_csv(handle)
 
 
-def read_all(paths: Iterable[str | Path]) -> Iterator[Transition]:
+def read_transitions(path: str | Path) -> Iterator[Transition]:
+    return (play.transition for play in read_plays(path))
+
+
+def read_all(paths: Iterable[str | Path]) -> Iterator[Play]:
     for path in paths:
-        yield from read_transitions(path)
+        yield from read_plays(path)

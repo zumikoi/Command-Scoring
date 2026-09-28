@@ -1,6 +1,5 @@
 import pytest
 
-from saikaku.decisions import Decision, score_decision
 from saikaku.model import GameState
 
 
@@ -15,25 +14,6 @@ def state(**changes):
     )
     values.update(changes)
     return GameState(**values)
-
-
-def test_scoring_compares_observed_action_with_alternative(model):
-    before = state()
-    decision = Decision(
-        team="中日",
-        game_id="test",
-        decision_type="送りバント",
-        description="無死一塁",
-        before=before,
-        observed_after=state(outs=1, runners=(False, True, False)),
-        best_alternative="通常打撃",
-        alternative_after=before,
-    )
-
-    result = score_decision(decision, model)
-
-    assert result.alternative_change == 0.0
-    assert result.decision_cost == pytest.approx(result.observed_change)
 
 
 @pytest.mark.parametrize(

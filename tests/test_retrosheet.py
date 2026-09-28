@@ -2,7 +2,7 @@ import zipfile
 
 import pytest
 
-from saikaku.retrosheet import SchemaError, read_transitions
+from saikaku.retrosheet import SchemaError, read_plays, read_transitions
 from saikaku.runs import Transition
 
 HEADER = "gid,inning,top_bot,outs_pre,outs_post,br1_pre,br2_pre,br3_pre,br1_post,br2_post,br3_post,runs"
@@ -53,3 +53,21 @@ def test_missing_column_is_an_error(tmp_path):
 
     with pytest.raises(SchemaError, match="runs"):
         list(read_transitions(path))
+
+
+def test_reads_tactic_flags(tmp_path):
+    header = HEADER + ",pa,bunt,k,pitches,iw,sb2,cs2,sb3,cs3"
+    rows = [
+        # Sacrifice bunt, and a strikeout on a foul bunt.
+        "G,1,0,0,1,a,,,,b,,0,1,1,0,BX,0,0,0,0,0",
+        "G,1,0,0,1,a,,,a,,,0,1,0,1,CFL,0,0,0,0,0",
+        # Steal of second between pitches, and a strikeout with a steal.
+        "G,1,0,0,0,a,,,,a,,0,0,0,0,,0,1,0,0,0",
+        "G,1,0,0,1,a,,,,a,,0,1,0,1,CCS,0,1,0,0,0",
+        # Double steal: not a single decision to run.
+        "G,1,0,0,0,a,b,,,a,b,0,0,0,0,,0,1,0,1,0",
+    ]
+    plays = list(read_plays(write_csv(tmp_path / "p.csv", rows=rows, header=header)))
+
+    assert [p.bunt_attempt for p in plays] == [True, True, False, False, False]
+    assert [p.steal_target for p in plays] == [None, None, 2, None, None]

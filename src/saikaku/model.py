@@ -119,6 +119,7 @@ class WinProbabilityModel:
         self.runs = runs
         self.rules = rules
         self._start = cache(self._start_of_half)
+        self._play_out = cache(self._play_out_uncached)
 
     @classmethod
     def load_default(cls) -> "WinProbabilityModel":
@@ -159,7 +160,9 @@ class WinProbabilityModel:
             after_value = 1.0 - after_value
         return (after_value - self.probability(before)) * 100
 
-    def _play_out(self, inning: int, half: str, outs: int, bases: int, diff: int) -> Outcome:
+    def _play_out_uncached(
+        self, inning: int, half: str, outs: int, bases: int, diff: int
+    ) -> Outcome:
         """Finish the current half inning from a base-out state, then the game."""
 
         walk_off_possible = half == "bottom" and inning >= self.rules.regulation_innings
