@@ -66,13 +66,27 @@ def test_game_note_is_parsed(table):
     game = parse_game(GAME, table)
 
     assert (game.away, game.home) == ("チームA", "チームB")
-    assert game.players["甲"].ability.ratio("HR") == 1.6
-    assert game.players["甲"].ability.hand == "L"
-    assert game.players["乙"].ability.ratio("K") > 1.0
+    assert game.players[("甲", True)].ability.ratio("HR") == 1.6
+    assert game.players[("甲", True)].ability.hand == "L"
+    assert game.players[("乙", True)].ability.ratio("K") > 1.0
     assert ("乙", "丙") in game.head_to_head
     assert [d.call for d in game.decisions] == ["送りバント", "強攻", "継投", "代打"]
     assert game.decisions[0].state.away_score == 3
     assert any("謎の人" in w for w in game.warnings)
+
+
+def test_a_pitcher_who_bats_has_separate_rows(model, table):
+    text = GAME.replace(
+        "| 丁 | 投 | 右 |  |  |  |  |  |  |  |  |  |",
+        "| 丁 | 投 | 右 |  | 500 | 90 |  |  | 5 | 20 | 2 | 200 |\n"
+        "| 丁 | 打 | 右 |  | 100 | 5 | 0 | 0 | 0 | 2 | 0 | 50 |",
+    )
+
+    game = parse_game(text, table)
+
+    assert game.players[("丁", False)].ability.ratio("K") > 1.3
+    assert game.players[("丁", True)].ability.ratio("K") > 1.5
+    assert game.players[("丁", False)].ability is not game.players[("丁", True)].ability
 
 
 def test_a_declined_call_scores_the_opposite_of_the_call(model, table):

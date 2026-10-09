@@ -87,7 +87,8 @@ class DecisionRow:
 @dataclass(frozen=True)
 class Game:
     properties: dict[str, str]
-    players: dict[str, Player]
+    #: Keyed by (name, batting): a pitcher who also bats has two rows.
+    players: dict[tuple[str, bool], Player]
     head_to_head: dict[tuple[str, str], StatLine]
     decisions: tuple[DecisionRow, ...]
     warnings: tuple[str, ...] = ()
@@ -235,7 +236,7 @@ def parse_game(text: str, events: EventTable) -> Game:
         if line is not None:
             league = league_rates(line)
 
-    players: dict[str, Player] = {}
+    players: dict[tuple[str, bool], Player] = {}
     for row in _table(sections.get("選手", [])):
         name = row.get("名前", "")
         if not name:
@@ -258,7 +259,7 @@ def parse_game(text: str, events: EventTable) -> Game:
             if hand not in HANDS or (not batting and hand == "両"):
                 raise GameFormatError(f"{name}: 左右は 右・左{'・両' if batting else ''} で書いてください")
             ability = replace(ability, hand=HANDS[hand])
-        players[name] = Player(name, batting, replace(ability, label=name))
+        players[(name, batting)] = Player(name, batting, replace(ability, label=name))
 
     head_to_head: dict[tuple[str, str], StatLine] = {}
     for row in _table(sections.get("対戦成績", [])):
@@ -305,9 +306,13 @@ def parse_game(text: str, events: EventTable) -> Game:
                 note=row.get("メモ", ""),
             )
         )
-        for name in (row.get("打者", ""), *names, row.get("投手", ""), row.get("代わり", "")):
-            if name and name not in players and name not in _profile_labels(events):
-                warnings.append(f"#{number}: 「{name}」は選手表にないのでリーグ平均として扱いました")
+        substitute_bats = call in ("代打", "代打なし")
+        roles = [(row.get("打者", ""), True), *((n, True) for n in names),
+                 (row.get("投手", ""), False), (row.get("代わり", ""), substitute_bats)]
+        for name, batting in roles:
+            if name and (name, batting) not in players and name not in _profile_labels(events):
+                role = "打者" if batting else "投手"
+                warnings.append(f"#{number}: 「{name}」の{role}としての行が選手表にないのでリーグ平均として扱いました")
 
     return Game(properties, players, head_to_head, tuple(decisions), tuple(dict.fromkeys(warnings)))
 
@@ -322,8 +327,8 @@ def _profile_labels(events: EventTable) -> set[str]:
 def _resolve(name: str, batting: bool, game: Game, events: EventTable) -> Ability:
     if not name:
         return AVERAGE
-    if name in game.players:
-        return game.players[name].ability
+    if (name, batting) in game.players:
+        return game.players[(name, batting)].ability
     try:
         return events.profile(name, batting)
     except KeyError:
