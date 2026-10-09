@@ -9,7 +9,7 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 ## 守ること
 
 - 利用条件で**明示的に許可された**データだけを使う。候補と不採用理由は `DATA_SOURCES.md`。購入・問い合わせはしない（2026-09-27 ユーザー決定）
-- NPB.jpやSPAIAなどから自動取得しない
+- NPB.jpやSPAIAなどから自動取得しない。NPB選手の成績はユーザーが手で入力するもので、ツール側で取りに行かない
 - Retrosheet由来の数値を出すときは帰属表示を必ず付ける（`retrosheet.ATTRIBUTION`）
 - 外部への投稿、課金、規約への同意はユーザーの確認を取ってから
 
@@ -20,10 +20,12 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 | `src/saikaku/runs.py` | 状態遷移の集計と、半イニングの残り得点分布（マルコフ連鎖） |
 | `src/saikaku/model.py` | `GameState`、NPBルールの勝率モデル |
 | `src/saikaku/retrosheet.py` | Retrosheet `<年>plays.zip` の読み込み |
-| `src/saikaku/fit.py` | `src/saikaku/data/` の `run_distribution.json` と `tactics.json` を作る |
+| `src/saikaku/fit.py` | `src/saikaku/data/` の `run_distribution.json`・`tactics.json`・`events.json` を作る |
+| `src/saikaku/abilities.py` | 打者・投手の力（リーグ比）、成績からの推定と平均への寄せ、log5 |
+| `src/saikaku/events.py` | 打席結果7種ごとの遷移（`events.json`）、選手の型、打順3人先までの前向き計算 |
 | `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）と、選んだ作戦と代替案の比較 |
 | `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示 |
-| `src/saikaku/demo.py`, `demo_template.html` | 全場面を事前計算した単一HTMLのデモ（`demo/` は生成物で git 対象外） |
+| `src/saikaku/demo.py`, `demo_template.html` | 単一HTMLのデモ。勝率表は事前計算、選手を含む評価はJSで再計算し、Python版の基準値と読み込み時に照合する（`demo/` は生成物で git 対象外）。tactics/events の計算を変えたらテンプレートのJSも直すこと |
 
 ## データの置き場所
 

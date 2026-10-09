@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .events import EventTable
 from .model import GameState, WinProbabilityModel
-from .tactics import DECISION_TYPES, Evaluation, TacticTable, evaluate
+from .tactics import DECISION_TYPES, Evaluation, Matchup, TacticTable, evaluate
 
 #: Differences smaller than this are shown as even. It is a display rounding,
 #: not a statistical threshold.
@@ -26,6 +27,7 @@ class Decision:
     before: GameState
     #: The state right after the play, if it was recorded. Not used to score.
     observed_after: GameState | None = None
+    matchup: Matchup = Matchup()
 
 
 @dataclass(frozen=True)
@@ -44,9 +46,11 @@ class ScoredDecision:
 
 
 def score_decision(
-    decision: Decision, model: WinProbabilityModel, table: TacticTable
+    decision: Decision, model: WinProbabilityModel, table: TacticTable, events: EventTable
 ) -> ScoredDecision:
-    evaluation = evaluate(decision.decision_type, decision.before, model, table)
+    evaluation = evaluate(
+        decision.decision_type, decision.before, model, table, events, decision.matchup
+    )
     result_change = None
     if decision.observed_after is not None:
         change = model.action_value(decision.before, decision.observed_after)

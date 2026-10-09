@@ -19,7 +19,11 @@
 - [x] 2022〜2024年のRetrosheet公式戦（56.7万遷移）で得点分布を作成（`src/saikaku/data/run_distribution.json`）
 - [x] 代替案の自動評価：送りバント・盗塁・敬遠（[tactics.py](src/saikaku/tactics.py)）
 - [x] 全場面を触れるデモ画面（`python -m saikaku.demo`）
-- [ ] 打者の力量差の扱い（バントする打者は平均より弱い。選択バイアスの補正）
+- [x] 打者・投手の力の反映（型と成績の手入力、打順3人先まで。[abilities.py](src/saikaku/abilities.py)、[events.py](src/saikaku/events.py)）
+- [x] 代打・継投の評価
+- [ ] 左右の相性（Retrosheetの `bathand` / `pithand` で推定できる）
+- [ ] 走者の足の速さ（盗塁・バントの結果を走者別に補正）
+- [ ] 継投の評価を3人先より先（その回の残り・次の回）まで広げる
 - [ ] 観戦記録の入力形式を決める（1試合1ファイル、Obsidianで書ける形）
 - [ ] 試合ごとのレポートをObsidianのノートとして出力する
 - [ ] 得点環境をNPB寄りに補正する方法の検討（許可されたNPBの集計値が見つかった場合のみ）
@@ -27,4 +31,3 @@
 ## 保留
 
 - X投稿（公開方針が決まってから）
-- 打者・投手個別の補正（推定できるデータがない）

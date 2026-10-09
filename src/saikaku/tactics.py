@@ -1,12 +1,15 @@
 """What each tactic tends to produce, and what a decision was worth.
 
-A decision is judged before its result is known: the chosen tactic and its
-alternative are each turned into a distribution of next base-out states, and
-their expected win probabilities are compared. The actual result plays no part.
+A decision is judged before its result is known. The chosen tactic and its
+alternative each start from a distribution of base-out states, which is then
+pushed through the next batters in the order against the pitcher on the mound
+(see :mod:`saikaku.events`), and the expected win probabilities are compared.
+The actual result plays no part.
 
-Swinging away, bunting and stealing are estimated from play-by-play data. An
-intentional walk needs no data, since the batter always takes first and only
-forced runners move. Leaving the runner put is the current state itself.
+Bunts and steals start from their observed outcomes. An intentional walk needs
+no data, since the batter always takes first and only forced runners move.
+Swinging away, a pinch hitter and a pitching change all start from the current
+state and differ only in who bats or pitches.
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .abilities import AVERAGE, Ability
+from .events import LINEUP_DEPTH, EventTable
 from .model import GameState, WinProbabilityModel
 from .retrosheet import Play
 from .runs import base_index, state_key
@@ -33,10 +38,18 @@ TACTIC_NAMES = {
     "steal3": "三盗",
     "stay": "自重",
     "ibb": "敬遠",
+    "pinch": "代打",
+    "keep_batter": "そのまま",
+    "relief": "継投",
+    "keep_pitcher": "続投",
 }
 
-#: Tactics whose outcomes come from data rather than from the rules.
-ESTIMATED = ("swing", "bunt", "steal2", "steal3")
+#: Tactics whose starting outcomes come from data.
+ESTIMATED = ("bunt", "steal2", "steal3")
+
+
+def _always(outs: int, bases: int) -> bool:
+    return True
 
 
 @dataclass(frozen=True)
@@ -46,20 +59,37 @@ class DecisionType:
     #: The side that made the call; its perspective sets the sign of the score.
     by_offense: bool
     #: Whether the call makes sense from a base-out state at all.
-    applies: Callable[[int, int], bool]
+    applies: Callable[[int, int], bool] = _always
+    #: Whether the chosen tactic uses up the current batter's plate appearance.
+    ends_plate_appearance: bool = False
 
 
 DECISION_TYPES = {
-    "送りバント": DecisionType("bunt", "swing", True, lambda outs, bases: outs < 2 and bases != 0),
+    "送りバント": DecisionType(
+        "bunt", "swing", True, lambda outs, bases: outs < 2 and bases != 0, True
+    ),
     "二盗": DecisionType("steal2", "stay", True, lambda outs, bases: bases & 0b011 == 0b001),
     "三盗": DecisionType("steal3", "stay", True, lambda outs, bases: bases & 0b110 == 0b010),
-    "敬遠": DecisionType("ibb", "swing", False, lambda outs, bases: True),
+    "敬遠": DecisionType("ibb", "swing", False, ends_plate_appearance=True),
+    "代打": DecisionType("pinch", "keep_batter", True),
+    "継投": DecisionType("relief", "keep_pitcher", False),
 }
 
-UNSUPPORTED = {
-    "継投": "投手ごとの能力を推定できるデータがないため評価しない",
-    "代打": "打者ごとの能力を推定できるデータがないため評価しない",
-}
+
+@dataclass(frozen=True)
+class Matchup:
+    """Who is involved: the order from the current batter on, and the pitchers."""
+
+    lineup: tuple[Ability, ...] = ()
+    pitcher: Ability = AVERAGE
+    pinch_hitter: Ability | None = None
+    reliever: Ability | None = None
+
+    def batters(self, start: int = 0) -> tuple[Ability, ...]:
+        """Batters ``start`` .. ``LINEUP_DEPTH - 1``, unknown ones league average."""
+
+        padded = tuple(self.lineup) + (AVERAGE,) * LINEUP_DEPTH
+        return padded[start:LINEUP_DEPTH]
 
 
 class InsufficientData(LookupError):
@@ -81,7 +111,7 @@ class TacticTable:
         counts: dict[str, dict[tuple[int, int], Counter]] = {name: {} for name in ESTIMATED}
         for play in plays:
             tactic = classify(play)
-            if tactic is None:
+            if tactic not in counts:
                 continue
             t = play.transition
             bases_post = 0 if t.outs_post == 3 else t.bases_post
@@ -91,7 +121,7 @@ class TacticTable:
         return cls(counts, source)
 
     def samples(self, tactic: str, outs: int, bases: int) -> int:
-        if tactic in ("stay", "ibb"):
+        if tactic not in self.counts:
             return 0
         return sum(self.counts[tactic].get((outs, bases), Counter()).values())
 
@@ -179,11 +209,23 @@ def after(state: GameState, outs: int, bases: int, runs: int) -> GameState:
 
 
 def expected_probability(
-    model: WinProbabilityModel, state: GameState, outcomes: list[Outcome]
+    model: WinProbabilityModel,
+    state: GameState,
+    start: list[Outcome],
+    events: EventTable,
+    lineup: tuple[Ability, ...],
+    pitcher: Ability,
 ) -> float:
-    """The batting team's win probability averaged over a tactic's outcomes."""
+    """The batting team's win probability after ``start`` and then ``lineup``."""
 
-    return sum(p * model.probability(after(state, o, b, r)) for o, b, r, p in outcomes)
+    total = 0.0
+    for o, b, r, p in start:
+        if o == 3:
+            total += p * model.probability(after(state, o, b, r))
+            continue
+        for (o2, b2, r2), q in events.forward(o, b, lineup, pitcher).items():
+            total += p * q * model.probability(after(state, o2, b2, r + r2))
+    return total
 
 
 @dataclass(frozen=True)
@@ -209,27 +251,45 @@ def evaluate(
     state: GameState,
     model: WinProbabilityModel,
     table: TacticTable,
+    events: EventTable,
+    matchup: Matchup = Matchup(),
 ) -> Evaluation:
-    if decision_type in UNSUPPORTED:
-        raise InsufficientData(f"{decision_type}: {UNSUPPORTED[decision_type]}")
     kind = DECISION_TYPES[decision_type]
     bases = base_index(state.runners)
     if state.outs > 2 or not kind.applies(state.outs, bases):
         raise ValueError(f"{decision_type} is not possible from {state_key(state.outs, bases)}")
+    if kind.chosen == "pinch" and matchup.pinch_hitter is None:
+        raise ValueError("代打の評価には代打の打者の能力が必要です")
+    if kind.chosen == "relief" and matchup.reliever is None:
+        raise ValueError("継投の評価には交代する投手の能力が必要です")
+
+    stay = [(state.outs, bases, 0, 1.0)]
+    current = matchup.batters()
+    if kind.chosen == "pinch":
+        chosen_lineup = (matchup.pinch_hitter,) + current[1:]
+    elif kind.ends_plate_appearance:
+        chosen_lineup = matchup.batters(1)
+    else:
+        chosen_lineup = current
+    chosen_pitcher = matchup.reliever if kind.chosen == "relief" else matchup.pitcher
+    if kind.chosen in ESTIMATED or kind.chosen == "ibb":
+        chosen_start = table.outcomes(kind.chosen, state.outs, bases)
+    else:
+        chosen_start = stay
 
     def side(probability: float) -> float:
         return probability if kind.by_offense else 1.0 - probability
 
-    values = {
-        tactic: side(expected_probability(model, state, table.outcomes(tactic, state.outs, bases)))
-        for tactic in (kind.chosen, kind.alternative)
-    }
+    chosen = expected_probability(
+        model, state, chosen_start, events, chosen_lineup, chosen_pitcher
+    )
+    alternative = expected_probability(model, state, stay, events, current, matchup.pitcher)
     return Evaluation(
         decision_type=decision_type,
         chosen=kind.chosen,
         alternative=kind.alternative,
-        chosen_probability=values[kind.chosen],
-        alternative_probability=values[kind.alternative],
+        chosen_probability=side(chosen),
+        alternative_probability=side(alternative),
         chosen_samples=table.samples(kind.chosen, state.outs, bases),
-        alternative_samples=table.samples(kind.alternative, state.outs, bases),
+        alternative_samples=events.samples(state.outs, bases),
     )

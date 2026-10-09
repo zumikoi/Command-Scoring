@@ -61,6 +61,12 @@ class Play:
     intentional_walk: bool = False
     #: The base a lone steal attempt targeted (2 or 3), made between pitches.
     steal_target: int | None = None
+    #: The plate appearance's outcome as one of ``abilities.EVENTS``; None for
+    #: non-PA plays, bunts and intentional walks.
+    event: str | None = None
+    batter: str = ""
+    pitcher: str = ""
+    season: str = ""
 
 
 def _occupied(value: str) -> bool:
@@ -101,12 +107,28 @@ def _steal_target(row: dict[str, str]) -> int | None:
     return target if target in (2, 3) else None
 
 
+#: Outcome columns checked in order; a plate appearance has at most one set.
+_EVENT_COLUMNS = (
+    ("k", "K"), ("walk", "BB"), ("hbp", "BB"),
+    ("single", "1B"), ("double", "2B"), ("triple", "3B"), ("hr", "HR"),
+)
+
+
+def _event(row: dict[str, str]) -> str:
+    for column, event in _EVENT_COLUMNS:
+        if _flag(row, column):
+            return event
+    return "OUT"
+
+
 def _to_play(row: dict[str, str]) -> Play:
     plate_appearance = _flag(row, "pa")
     bunt_attempt = plate_appearance and (
         _flag(row, "bunt")
         or (_flag(row, "k") and row.get("pitches", "")[-1:] in _BUNT_PITCHES)
     )
+    intentional_walk = _flag(row, "iw")
+    has_event = plate_appearance and not bunt_attempt and not intentional_walk
     return Play(
         transition=Transition(
             outs_pre=int(row["outs_pre"]),
@@ -117,8 +139,12 @@ def _to_play(row: dict[str, str]) -> Play:
         ),
         plate_appearance=plate_appearance,
         bunt_attempt=bunt_attempt,
-        intentional_walk=_flag(row, "iw"),
+        intentional_walk=intentional_walk,
         steal_target=_steal_target(row),
+        event=_event(row) if has_event else None,
+        batter=row.get("batter", ""),
+        pitcher=row.get("pitcher", ""),
+        season=row.get("date", "")[:4],
     )
 
 

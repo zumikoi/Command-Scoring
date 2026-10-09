@@ -2,8 +2,9 @@
 
     python -m saikaku.fit <plays.zip> [<plays.zip> ...]
 
-Writes ``src/saikaku/data/run_distribution.json`` and ``tactics.json`` and
-prints the run expectancy table so the fit can be checked by eye.
+Writes ``run_distribution.json``, ``tactics.json`` and ``events.json`` under
+``src/saikaku/data/``, and prints the run expectancy table and the player
+profiles so the fit can be checked by eye.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .events import DEFAULT_EVENTS, EventTable
 from .model import DEFAULT_RUN_DISTRIBUTION
 from .retrosheet import ATTRIBUTION, read_all
 from .runs import RunDistribution, TransitionTable
@@ -38,14 +40,20 @@ def main() -> None:
     source = f"Retrosheet {names} ({table.total()} transitions). {ATTRIBUTION}"
     runs = RunDistribution.from_table(table, source=source)
     tactics = TacticTable.from_plays(plays, source=source)
+    events = EventTable.from_plays(plays, source=source)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / DEFAULT_RUN_DISTRIBUTION.name).write_text(runs.to_json(), encoding="utf-8")
     (args.out_dir / DEFAULT_TACTICS.name).write_text(tactics.to_json(), encoding="utf-8")
+    (args.out_dir / DEFAULT_EVENTS.name).write_text(events.to_json(), encoding="utf-8")
     print(f"{table.total()} transitions -> {args.out_dir}")
     for tactic, by_state in tactics.counts.items():
         print(f"  {tactic}: {sum(sum(c.values()) for c in by_state.values())} plays")
     print(run_expectancy_table(runs))
+    for role, profiles in (("打者", events.batter_profiles), ("投手", events.pitcher_profiles)):
+        for ability in profiles:
+            ratios = " ".join(f"{e}={ability.ratio(e):.2f}" for e in ("K", "BB", "1B", "2B", "HR"))
+            print(f"  {role} {ability.label}: {ratios}")
 
 
 if __name__ == "__main__":
