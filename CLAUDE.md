@@ -25,6 +25,7 @@ NPBの**特定の試合の、特定の場面の判断**を、その時点の勝�
 | `src/saikaku/events.py` | 打席結果7種ごとの遷移（`events.json`）、選手の型、左右の係数、対戦成績の寄せの測定（最終シーズンを予測して決める）、打順3人先までの前向き計算 |
 | `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）と、選んだ作戦と代替案の比較 |
 | `src/saikaku/game.py` | **主な入口。** 試合ノート（Obsidianの表）を読み、判断ごとに採点してチーム合計のレポート `〜_採点.md` を書く |
+| `src/saikaku/card.py` | X投稿用の画像（原則1枚）と定型本文。書式の決まりは `POST_FORMAT.md`。game から自動で呼ばれる |
 | `試合/` | ユーザーの試合ノート置き場。テンプレート以外は git 対象外 |
 | `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示（JSON入力） |
 | `src/saikaku/demo.py`, `demo_template.html` | 単一HTMLのデモ。勝率表は事前計算、選手を含む評価はJSで再計算し、Python版の基準値と読み込み時に照合する（`demo/` は生成物で git 対象外）。tactics/events の計算を変えたらテンプレートのJSも直すこと |

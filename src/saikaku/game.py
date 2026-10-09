@@ -6,7 +6,9 @@ A game is an Obsidian note: properties for the date and teams, then tables
 for players, head-to-head records and the decisions in order. Each decision is
 scored on its own, at the moment it was made, and a team's score for the game
 is the sum of its decisions in win-probability points. The report is written
-next to the note as ``<note>_採点.md``; the note itself is never changed.
+next to the note as ``<note>_採点.md``, together with the X post images and
+text from :mod:`saikaku.card` when Pillow is installed; the note itself is
+never changed.
 
 Calls not made count too. ``強攻`` (no bunt), ``二盗せず``, ``三盗せず``,
 ``勝負`` (no intentional walk), ``代打なし`` and ``続投`` are scored as the
@@ -428,7 +430,13 @@ def _scene(state: GameState) -> str:
             f" {state.away_score}-{state.home_score}")
 
 
-def render_report(game: Game, rows: list[ScoredRow], source_name: str) -> str:
+def render_report(
+    game: Game,
+    rows: list[ScoredRow],
+    source_name: str,
+    post_images: list[str] = (),
+    post: str = "",
+) -> str:
     date = game.properties.get("日付", "")
     title = f"{date} {game.away} vs {game.home}".strip()
     lines = [
@@ -442,6 +450,14 @@ def render_report(game: Game, rows: list[ScoredRow], source_name: str) -> str:
         "点数は、判断ごとに「選んだ采配」と「代わりにあり得た采配」の勝率を比べた差（pt）の合計です。"
         "+1.0pt は、その采配で勝つ確率を1%上げたという意味です。結果がどうなったかは点数に入れていません。",
         "",
+    ]
+    if post_images or post:
+        lines += ["## 投稿用", ""]
+        lines += [f"![[{name}]]" for name in post_images]
+        if post:
+            lines += ["", "```", post, "```"]
+        lines += [""]
+    lines += [
         "## 総合",
         "",
         "| チーム | 点数 | 判断数 | 好判断 | 互角 | 疑問 |",
@@ -515,12 +531,26 @@ def main() -> None:
     except GameFormatError as error:
         raise SystemExit(f"{path.name}: {error}") from None
     rows = score_game(game, WinProbabilityModel.load_default(), TacticTable.load(), events)
+    images, post = [], ""
+    try:
+        from .card import write_post
+    except ImportError:
+        pass
+    else:
+        try:
+            images, post = write_post(path, game, rows)
+        except SystemExit as error:  # Pillow or a font is missing: report only
+            print(f"投稿用の画像は作れませんでした: {error}")
     out = path.with_name(f"{path.stem}_採点.md")
-    out.write_text(render_report(game, rows, path.stem), encoding="utf-8")
+    out.write_text(
+        render_report(game, rows, path.stem, [p.name for p in images], post), encoding="utf-8"
+    )
     for t in team_totals(game, rows):
         print(f"{t.team}: {t.total:+.1f}pt（{len(t.scored)}判断）")
     for warning in game.warnings:
         print(f"注意: {warning}")
+    for image in images:
+        print(f"-> {image}")
     print(f"-> {out}")
 
 
