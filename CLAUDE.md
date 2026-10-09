@@ -4,7 +4,7 @@
 
 ## ゴール
 
-NPBの采配を、意思決定時点の勝利確率の変化で採点する。できる範囲でやる。
+NPBの**特定の試合の、特定の場面の判断**を、その時点の勝利確率で1つずつ採点し、試合ごとに監督（チーム）の采配点を出す。一般論の分析が目的ではない（2026-10-09 ユーザーの言葉）。できる範囲でやる。
 
 ## 守ること
 
@@ -24,7 +24,9 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 | `src/saikaku/abilities.py` | 打者・投手の力（リーグ比）、成績からの推定と平均への寄せ、log5、左右、対戦成績の補正 |
 | `src/saikaku/events.py` | 打席結果7種ごとの遷移（`events.json`）、選手の型、左右の係数、対戦成績の寄せの測定（最終シーズンを予測して決める）、打順3人先までの前向き計算 |
 | `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）と、選んだ作戦と代替案の比較 |
-| `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示 |
+| `src/saikaku/game.py` | **主な入口。** 試合ノート（Obsidianの表）を読み、判断ごとに採点してチーム合計のレポート `〜_採点.md` を書く |
+| `試合/` | ユーザーの試合ノート置き場。テンプレート以外は git 対象外 |
+| `src/saikaku/decisions.py`, `cli.py`, `report.py` | 采配1件の採点と表示（JSON入力） |
 | `src/saikaku/demo.py`, `demo_template.html` | 単一HTMLのデモ。勝率表は事前計算、選手を含む評価はJSで再計算し、Python版の基準値と読み込み時に照合する（`demo/` は生成物で git 対象外）。tactics/events の計算を変えたらテンプレートのJSも直すこと |
 
 ## データの置き場所
@@ -39,6 +41,7 @@ NPBの采配を、意思決定時点の勝利確率の変化で採点する。�
 ```
 $env:PYTHONPATH = "src"
 python -m saikaku.fit "$env:LOCALAPPDATA\Saikaku\retrosheet\2024plays.zip"
+python -m saikaku.game samples/game.md
 python -m saikaku.cli samples/decision.json
 python -m saikaku.demo   # プレビューは .claude/launch.json の demo
 python -m pytest
