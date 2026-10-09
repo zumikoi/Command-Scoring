@@ -1,7 +1,9 @@
+from collections import Counter
+
 import pytest
 
 from saikaku.abilities import AVERAGE, EVENTS, Ability
-from saikaku.events import EventTable
+from saikaku.events import EventTable, measure_head_to_head
 from saikaku.retrosheet import Play
 from saikaku.runs import Transition
 
@@ -55,3 +57,57 @@ def test_json_round_trip(events):
     assert restored.rates == events.rates
     assert restored.transitions == events.transitions
     assert restored.league == pytest.approx(events.league)
+
+
+def _pairs_with(effect: float, seed: int = 1):
+    """Synthetic pairs over two seasons, each pair's K rate shifted the same way."""
+
+    import random
+
+    rng = random.Random(seed)
+    pairs = {}
+    for b in range(30):
+        for p in range(30):
+            shift = rng.choice((-effect, effect))
+            k_rate = 0.22 * (1 + shift)
+            for season in ("2023", "2024"):
+                n = 15
+                k = sum(rng.random() < k_rate for _ in range(n))
+                others = {"BB": 1, "1B": 1, "2B": 1, "3B": 1, "HR": 1}
+                pairs[(season, f"b{b}", f"p{p}", "same")] = Counter(
+                    {"K": k, **others, "OUT": n - k}
+                )
+    return pairs
+
+
+def test_head_to_head_measurement_finds_a_planted_effect():
+    pseudo, summary = measure_head_to_head(_pairs_with(effect=0.5))
+
+    assert pseudo["K"] < 300
+    assert summary["pairs"] == 900
+    assert summary["held_out_season"] == "2024"
+
+
+def test_head_to_head_measurement_finds_nothing_when_there_is_nothing():
+    pseudo, _ = measure_head_to_head(_pairs_with(effect=0.0))
+
+    assert pseudo["K"] > 1000
+
+
+def test_head_to_head_needs_two_seasons():
+    one_season = {k: v for k, v in _pairs_with(0.5).items() if k[0] == "2024"}
+
+    pseudo, summary = measure_head_to_head(one_season)
+
+    assert pseudo["K"] == 1_000_000
+    assert "note" in summary
+
+
+def test_forward_uses_head_to_head_for_the_matching_pair(events):
+    whiff = {**{e: 1.0 for e in EVENTS}, "K": 50.0}
+    lookup = lambda batter, pitcher: whiff if batter is POWER else None
+
+    with_pair = events.forward(2, 0, (POWER,), AVERAGE, lookup)
+    without = events.forward(2, 0, (POWER,), AVERAGE)
+
+    assert with_pair[(3, 0, 0)] > without[(3, 0, 0)]

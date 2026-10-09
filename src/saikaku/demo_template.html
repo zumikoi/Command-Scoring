@@ -73,7 +73,7 @@ svg.diamond { width: 100%; max-width: 200px; height: auto; display: block; margi
 
 .player { padding: 10px 0; border-top: 1px solid var(--border); }
 .player:first-of-type { border-top: 0; padding-top: 0; }
-.player .row { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 8px; align-items: center; }
+.player .row { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) 4.2em; gap: 6px; align-items: center; }
 .player .role { font-size: .85rem; font-weight: 600; }
 .player .role small { display: block; font-weight: 400; color: var(--muted); font-size: .7rem; }
 .player select { width: 100%; padding: 5px 6px; font-size: .85rem; }
@@ -84,8 +84,10 @@ svg.diamond { width: 100%; max-width: 200px; height: auto; display: block; margi
 .stat-note { font-size: .72rem; margin-top: 4px; color: var(--muted); }
 .stat-note.err { color: var(--neg); }
 .summary { font-size: .72rem; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
-details.league { margin-top: 12px; font-size: .82rem; }
-details.league summary { cursor: pointer; color: var(--accent); }
+details.league, details.h2h { margin-top: 12px; font-size: .82rem; }
+details.league summary, details.h2h summary { cursor: pointer; color: var(--accent); }
+.h2h-pair { margin-top: 10px; }
+.h2h-pair .who { font-size: .8rem; font-weight: 600; }
 
 .headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
 .headline .big { font-size: 3rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
@@ -212,6 +214,12 @@ footer p { margin: 6px 0; }
           <div class="stat-note" id="leagueNote"></div>
         </details>
       </section>
+
+      <section class="panel" aria-label="対戦成績">
+        <h2>対戦成績（相性）</h2>
+        <p class="hint" id="h2hWeights"></p>
+        <div id="h2h"></div>
+      </section>
     </div>
 
     <div class="col">
@@ -249,6 +257,7 @@ footer p { margin: 6px 0; }
   <footer>
     <p><strong>読み方：</strong>いまの打者から3人目までは、選んだ打者・投手の力で打席の結果を計算します。その先は平均的な打者・投手として扱います。送りバントは「バントを試みた打席」全体の結果で、バント安打や失敗を含みます。走者の足の速さは反映していません。</p>
     <p><strong>選手の力：</strong>三振・四球・単打・二塁打・三塁打・本塁打の起こりやすさを、リーグ平均との比で表します。打席数が少ない成績はリーグ平均に寄せて見積もります。選手の型はMLBの規定打席級の選手を力量順に並べ、その層の平均を取ったものです。</p>
+    <p><strong>相性：</strong>左右の組み合わせ（同じ側か逆か）による差を土台に入れています。打者×投手の対戦成績は、二人の力から予想される結果と比べ、過去のデータで実際に翌年の対戦を当てられた分だけ反映します。三振と四球には相性が見られますが、本塁打と安打にはほとんど見られないため、対戦打率が高くても評価はほぼ動きません。</p>
     <p><strong>ルール：</strong>NPB公式戦に合わせ、12回で同点なら引き分け。引き分けは勝ち0.5として評価します。</p>
     <p><strong>データ：</strong>打席の結果と得点の起こりやすさはMLB 2022〜2024年公式戦（Retrosheet）から推定しており、NPBの得点環境との差は未補正です。成績の数字はあなたが入力したもので、この画面が取得することはありません。</p>
     <p id="attribution"></p>
@@ -281,7 +290,8 @@ const PITCHER_FIELDS = [["pa", "打者"], ["h", "被安打"], ["hr", "被本塁�
 
 // ---- abilities (mirrors abilities.py) ----
 let nextId = 1;
-const ability = (ratios, label) => ({ id: nextId++, ratios, label });
+const ability = (ratios, label, hand = null) => ({ id: nextId++, ratios, label, hand });
+const withHand = (a, hand) => hand ? { ...a, id: nextId++, hand } : a;
 const AVERAGE = ability(Object.fromEntries(EVENTS.map(e => [e, 1])), AVERAGE_LABEL);
 const PROFILES = {
   batter: DATA.profiles.batter.map(p => ability(p.ratios, p.label)),
@@ -347,23 +357,66 @@ function pitcherAbility(l, league) {
   return toAbility(rates, league, "成績から推定");
 }
 
-function matchupRates(base, bat, pit) {
+function platoonSide(bh, ph) {
+  if (!bh || !ph || !["R", "L"].includes(ph)) return null;
+  if (bh === "S" || bh === "B") return "opposite";
+  return bh === ph ? "same" : "opposite";
+}
+
+function matchupRates(base, bat, pit, pair = null, platoon = DATA.platoon) {
+  const side = platoonSide(bat.hand, pit.hand);
+  const hand = side && platoon ? platoon[side] || {} : {};
+  const f = pair ? pair.factors : {};
   const w = {};
   let total = 0;
-  for (const e of EVENTS) { w[e] = (base[e] || 0) * ratio(bat, e) * ratio(pit, e); total += w[e]; }
+  for (const e of EVENTS) {
+    w[e] = (base[e] || 0) * ratio(bat, e) * ratio(pit, e) * (hand[e] ?? 1) * (f[e] ?? 1);
+    total += w[e];
+  }
   for (const e of EVENTS) w[e] /= total;
   return w;
 }
 
+// Mirrors abilities.head_to_head_factors.
+function headToHeadFactors(l, expected, pseudo) {
+  const c = counts(l);
+  const pa = l.pa;
+  if (pa <= 0) return Object.fromEntries(EVENTS.map(e => [e, 1]));
+  const regress = (obs, rate, k) => (obs + k * rate) / (pa + k);
+  const rates = {};
+  for (const e of ["K", "BB", "HR"]) rates[e] = regress(c[e], expected[e], pseudo[e]);
+  if (c["2B"] == null) {
+    const hitRate = expected["1B"] + expected["2B"] + expected["3B"];
+    const k = ["1B", "2B", "3B"].reduce((a, e) => a + pseudo[e] * expected[e], 0) / hitRate;
+    const hits = regress(c.H - c.HR, hitRate, k);
+    for (const e of ["1B", "2B", "3B"]) rates[e] = hits * expected[e] / hitRate;
+  } else {
+    for (const e of ["1B", "2B", "3B"]) rates[e] = regress(c[e], expected[e], pseudo[e]);
+  }
+  rates.OUT = Math.max(1 - ["K", "BB", "1B", "2B", "3B", "HR"].reduce((a, e) => a + rates[e], 0), 1e-9);
+  return Object.fromEntries(EVENTS.map(e => [e, rates[e] / expected[e]]));
+}
+
+function pairFactors(bat, pit, line) {
+  const expected = matchupRates(DATA.events.league, bat, pit);
+  return { id: nextId++, factors: headToHeadFactors(line, expected, DATA.h2hPseudo) };
+}
+
+function pairLookup(records) {
+  if (!records.length) return null;
+  const map = new Map(records.map(([b, p, line]) => [`${b.id}|${p.id}`, pairFactors(b, p, line)]));
+  return (b, p) => map.get(`${b.id}|${p.id}`) || null;
+}
+
 // ---- plate-appearance lookahead (mirrors events.py) ----
 const paCache = new Map();
-function paOutcomes(o, b, bat, pit) {
-  const key = `${o}${b}|${bat.id}|${pit.id}`;
+function paOutcomes(o, b, bat, pit, pair = null) {
+  const key = `${o}${b}|${bat.id}|${pit.id}|${pair ? pair.id : 0}`;
   if (paCache.has(key)) return paCache.get(key);
   const counts = DATA.events.rates[`${o}${b}`];
   const total = Object.values(counts).reduce((a, n) => a + n, 0);
   const base = Object.fromEntries(EVENTS.map(e => [e, (counts[e] || 0) / total]));
-  const probs = matchupRates(base, bat, pit);
+  const probs = matchupRates(base, bat, pit, pair);
   const acc = new Map();
   let covered = 0;
   for (const e of EVENTS) {
@@ -381,14 +434,15 @@ function paOutcomes(o, b, bat, pit) {
   return out;
 }
 
-function forward(o, b, lineup, pit) {
+function forward(o, b, lineup, pit, pairs = null) {
   let cur = new Map([[o * 1000 + b * 100, 1]]);
   for (const bat of lineup) {
+    const pair = pairs ? pairs(bat, pit) : null;
     const next = new Map();
     for (const [k, p] of cur) {
       const ko = Math.floor(k / 1000), kb = Math.floor(k / 100) % 10, kr = k % 100;
       if (ko === 3) { next.set(k, (next.get(k) || 0) + p); continue; }
-      for (const [o2, b2, r2, q] of paOutcomes(ko, kb, bat, pit)) {
+      for (const [o2, b2, r2, q] of paOutcomes(ko, kb, bat, pit, pair)) {
         const nk = o2 * 1000 + b2 * 100 + kr + r2;
         next.set(nk, (next.get(nk) || 0) + p * q);
       }
@@ -422,11 +476,11 @@ function tacticStart(tactic, o, b) {
   return { rows: rows.map(([o2, b2, r2, c]) => [o2, b2, r2, c / n]).sort((x, y) => y[3] - x[3]), n };
 }
 
-function expectedWp(st, start, lineup, pit) {
+function expectedWp(st, start, lineup, pit, pairs = null) {
   let total = 0;
   for (const [o, b, r, p] of start) {
     if (o === 3) { total += p * wpAfter(st, o, b, r); continue; }
-    for (const [k, q] of forward(o, b, lineup, pit)) {
+    for (const [k, q] of forward(o, b, lineup, pit, pairs)) {
       total += p * q * wpAfter(st, Math.floor(k / 1000), Math.floor(k / 100) % 10, r + k % 100);
     }
   }
@@ -456,8 +510,8 @@ function evaluate(name, st, m) {
   }
   const side = p => dec.byOffense ? p : 1 - p;
   return {
-    chosen: side(expectedWp(st, chosenStart, chosenLineup, chosenPitcher)),
-    alt: side(expectedWp(st, stay, current, m.pitcher)),
+    chosen: side(expectedWp(st, chosenStart, chosenLineup, chosenPitcher, m.pairs)),
+    alt: side(expectedWp(st, stay, current, m.pitcher, m.pairs)),
     chosenStart, chosenLineup, chosenPitcher, n,
   };
 }
@@ -473,7 +527,13 @@ const ROLES = [
   { key: "pinch", label: "代打の候補", sub: "代打カード用", batting: true },
   { key: "reliever", label: "継投の候補", sub: "継投カード用", batting: false },
 ];
-const choice = Object.fromEntries(ROLES.map(r => [r.key, { mode: AVERAGE_LABEL, line: {} }]));
+const choice = Object.fromEntries(ROLES.map(r => [r.key, { mode: AVERAGE_LABEL, line: {}, hand: "" }]));
+const H2H_PAIRS = [
+  { key: "batter_pitcher", label: "打者 × 投手", batter: "batter", pitcher: "pitcher", use: "全カード" },
+  { key: "pinch_pitcher", label: "代打の候補 × 投手", batter: "pinch", pitcher: "pitcher", use: "代打カード" },
+  { key: "batter_reliever", label: "打者 × 継投の候補", batter: "batter", pitcher: "reliever", use: "継投カード" },
+];
+const h2hLines = Object.fromEntries(H2H_PAIRS.map(p => [p.key, {}]));
 choice.pinch.mode = PROFILES.batter[0]?.label ?? AVERAGE_LABEL;
 choice.reliever.mode = PROFILES.pitcher[0]?.label ?? AVERAGE_LABEL;
 const leagueLine = {};
@@ -498,6 +558,10 @@ function readLine(raw, fields) {
 }
 
 function resolve(role, league) {
+  return withHand(resolveRatios(role, league), choice[role.key].hand);
+}
+
+function resolveRatios(role, league) {
   const c = choice[role.key];
   const note = document.querySelector(`[data-note="${role.key}"]`);
   if (c.mode !== "__line") {
@@ -521,7 +585,26 @@ function resolve(role, league) {
 function currentMatchup() {
   const league = currentLeague();
   const a = Object.fromEntries(ROLES.map(r => [r.key, resolve(r, league)]));
-  return { lineup: [a.batter, a.next1, a.next2], pitcher: a.pitcher, pinchHitter: a.pinch, reliever: a.reliever };
+  const records = [];
+  for (const pair of H2H_PAIRS) {
+    const note = document.querySelector(`[data-h2h-note="${pair.key}"]`);
+    const raw = h2hLines[pair.key];
+    if (!Object.values(raw).some(v => v !== "" && v !== undefined)) { note.textContent = ""; continue; }
+    const l = readLine(raw, BATTER_FIELDS);
+    if (!l) { note.textContent = "必須の欄（打席・安打・本塁打・四球・三振）を埋めると反映します。"; note.className = "stat-note"; continue; }
+    const err = validateLine(l);
+    if (err) { note.textContent = err; note.className = "stat-note err"; continue; }
+    const bat = a[pair.batter], pit = a[pair.pitcher];
+    records.push([bat, pit, l]);
+    const f = pairFactors(bat, pit, l).factors;
+    note.textContent = "補正： " + [["K", "三振"], ["BB", "四死球"], ["HR", "本塁打"], ["1B", "単打"]]
+      .map(([e, n]) => `${n} ×${f[e].toFixed(2)}`).join("　");
+    note.className = "stat-note";
+  }
+  return {
+    lineup: [a.batter, a.next1, a.next2], pitcher: a.pitcher, pinchHitter: a.pinch, reliever: a.reliever,
+    pairs: pairLookup(records),
+  };
 }
 
 function buildPlayers() {
@@ -533,8 +616,11 @@ function buildPlayers() {
     const profiles = PROFILES[role.batting ? "batter" : "pitcher"];
     const opts = [AVERAGE_LABEL, ...profiles.map(p => p.label)]
       .map(l => `<option value="${l}">${l}</option>`).join("") + `<option value="__line">成績を入力…</option>`;
+    const hands = role.batting ? [["", "左右"], ["R", "右打"], ["L", "左打"], ["S", "両打"]]
+                               : [["", "左右"], ["R", "右投"], ["L", "左投"]];
     div.innerHTML = `<div class="row"><label class="role" for="sel-${role.key}">${role.label}<small>${role.sub}</small></label>
-      <select id="sel-${role.key}">${opts}</select></div>
+      <select id="sel-${role.key}">${opts}</select>
+      <select id="hand-${role.key}" aria-label="${role.label}の左右">${hands.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
       <div class="stats" data-stats="${role.key}" hidden></div><div class="stat-note" data-note="${role.key}"></div>`;
     root.appendChild(div);
     const sel = div.querySelector("select");
@@ -545,8 +631,24 @@ function buildPlayers() {
       `<label>${l}<input inputmode="numeric" type="number" min="0" data-k="${k}" value="${choice[role.key].line[k] ?? ""}"></label>`).join("");
     stats.hidden = sel.value !== "__line";
     sel.onchange = () => { choice[role.key].mode = sel.value; stats.hidden = sel.value !== "__line"; render(); };
+    const hand = div.querySelector(`#hand-${role.key}`);
+    hand.value = choice[role.key].hand;
+    hand.onchange = () => { choice[role.key].hand = hand.value; render(); };
     stats.querySelectorAll("input").forEach(inp => inp.oninput = () => { choice[role.key].line[inp.dataset.k] = inp.value; render(); });
   }
+  const h2h = document.getElementById("h2h");
+  h2h.innerHTML = H2H_PAIRS.map(p => `<details class="h2h"><summary>${p.label}<span style="color:var(--muted)">（${p.use}）</span></summary>
+    <div class="stats" data-h2h="${p.key}">${BATTER_FIELDS.map(([k, l]) =>
+      `<label>${l}<input inputmode="numeric" type="number" min="0" data-k="${k}"></label>`).join("")}</div>
+    <div class="stat-note" data-h2h-note="${p.key}"></div></details>`).join("");
+  h2h.querySelectorAll("[data-h2h]").forEach(box => box.querySelectorAll("input").forEach(inp =>
+    inp.oninput = () => { h2hLines[box.dataset.h2h][inp.dataset.k] = inp.value; render(); }));
+  const weights = [["K", "三振"], ["BB", "四球"], ["HR", "本塁打"], ["1B", "安打"]]
+    .map(([e, n]) => `${n} ${(20 / (20 + DATA.h2hPseudo[e]) * 100).toFixed(0)}%`).join("・");
+  const season = DATA.h2hSummary.held_out_season;
+  document.getElementById("h2hWeights").textContent =
+    `20打席の対戦成績を、二人の力からの予想に対してどれだけ効かせるか：${weights}。` +
+    (season ? `MLBで前年までの対戦成績から${season}年の対戦を最もよく当てた割合です。` : "");
   const ls = document.getElementById("leagueStats");
   ls.innerHTML = BATTER_FIELDS.map(([k, l]) => `<label>${l}<input inputmode="numeric" type="number" min="0" data-k="${k}"></label>`).join("");
   ls.querySelectorAll("input").forEach(inp => inp.oninput = () => { leagueLine[inp.dataset.k] = inp.value; render(); });
@@ -696,8 +798,14 @@ function selfCheck() {
   const toA = (spec, batting) => {
     if (spec == null) return null;
     if (typeof spec === "string") return PROFILES[batting ? "batter" : "pitcher"].find(p => p.label === spec);
-    const l = { hbp: 0, doubles: null, triples: null, ...spec };
-    return batting ? batterAbility(l, league) : pitcherAbility(l, league);
+    const { hand, profile, ...line } = spec;
+    let a;
+    if (profile) a = PROFILES[batting ? "batter" : "pitcher"].find(p => p.label === profile);
+    else {
+      const l = { hbp: 0, doubles: null, triples: null, ...line };
+      a = batting ? batterAbility(l, league) : pitcherAbility(l, league);
+    }
+    return withHand(a, hand);
   };
   const failures = [];
   for (const c of DATA.reference) {
@@ -708,6 +816,13 @@ function selfCheck() {
       pitcher: toA(p.pitcher, false) || AVERAGE,
       pinchHitter: toA(p.pinch_hitter, true), reliever: toA(p.reliever, false),
     };
+    const roles = {
+      batter_pitcher: [m.lineup[0] || AVERAGE, m.pitcher],
+      pinch_pitcher: [m.pinchHitter, m.pitcher],
+      batter_reliever: [m.lineup[0] || AVERAGE, m.reliever],
+    };
+    m.pairs = pairLookup(Object.entries(p.h2h || {}).map(([k, line]) =>
+      [...roles[k], { hbp: 0, doubles: null, triples: null, ...line }]));
     const ev = evaluate(c.type, c.state, m);
     const got = ev ? [ev.chosen, ev.alt] : [NaN, NaN];
     const err = Math.max(Math.abs(got[0] - c.expected[0]), Math.abs(got[1] - c.expected[1]));

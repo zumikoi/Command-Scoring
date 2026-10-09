@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from .abilities import (
@@ -45,7 +46,8 @@ HALVES = ("top", "bottom")
 MAX_DIFF = 10
 
 #: Reference evaluations the page must reproduce. Abilities are profile
-#: labels, or stat lines measured against the fitted league.
+#: labels, stat lines measured against the fitted league, or either with a
+#: ``hand``; ``h2h`` holds head-to-head batting lines by pair.
 REFERENCE_CASES = (
     ("送りバント", (7, "top", 0, 1, 3, 3), {"lineup": ["非力（下位10%）", "強打者（上位10%）"]}),
     ("送りバント", (5, "bottom", 0, 3, 2, 4), {"pitcher": "エース級（上位10%）"}),
@@ -60,6 +62,25 @@ REFERENCE_CASES = (
     ("継投", (7, "top", 1, 5, 3, 4), {
         "pitcher": "不安定（下位10%）",
         "reliever": {"pa": 250, "h": 45, "hr": 4, "bb": 18, "hbp": 2, "so": 85},
+    }),
+    ("敬遠", (8, "bottom", 1, 2, 3, 3), {
+        "lineup": [{"profile": "好打者（上位10〜30%）", "hand": "L"}, {"profile": "平均的なレギュラー", "hand": "R"}],
+        "pitcher": {"profile": "好投手（上位10〜30%）", "hand": "L"},
+        "h2h": {"batter_pitcher": {"pa": 18, "h": 2, "hr": 0, "bb": 1, "hbp": 0, "so": 8}},
+    }),
+    ("継投", (9, "top", 2, 3, 2, 3), {
+        "lineup": [{"pa": 500, "h": 135, "doubles": 25, "triples": 1, "hr": 25, "bb": 55, "hbp": 5,
+                    "so": 120, "hand": "S"}],
+        "pitcher": {"profile": "平均的な投手", "hand": "R"},
+        "reliever": {"profile": "好投手（上位10〜30%）", "hand": "L"},
+        "h2h": {"batter_reliever": {"pa": 15, "h": 6, "doubles": 1, "triples": 0, "hr": 2, "bb": 2,
+                                    "hbp": 0, "so": 1}},
+    }),
+    ("代打", (6, "top", 1, 1, 1, 2), {
+        "lineup": [{"profile": "非力（下位10%）", "hand": "R"}],
+        "pitcher": {"profile": "エース級（上位10%）", "hand": "R"},
+        "pinch_hitter": {"profile": "平均的なレギュラー", "hand": "L"},
+        "h2h": {"pinch_pitcher": {"pa": 10, "h": 4, "hr": 1, "bb": 2, "hbp": 0, "so": 0}},
     }),
 )
 
@@ -80,8 +101,14 @@ def _ability(spec, batting: bool, events: EventTable):
         return None
     if isinstance(spec, str):
         return events.profile(spec, batting)
-    estimate = batter_ability if batting else pitcher_ability
-    return estimate(StatLine(**spec), events.league)
+    spec = dict(spec)
+    hand = spec.pop("hand", None)
+    if "profile" in spec:
+        ability = events.profile(spec["profile"], batting)
+    else:
+        estimate = batter_ability if batting else pitcher_ability
+        ability = estimate(StatLine(**spec), events.league)
+    return replace(ability, hand=hand) if hand else ability
 
 
 def _reference(model: WinProbabilityModel, table: TacticTable, events: EventTable) -> list:
@@ -89,12 +116,20 @@ def _reference(model: WinProbabilityModel, table: TacticTable, events: EventTabl
     for name, (inning, half, outs, bases, away, home), players in REFERENCE_CASES:
         runners = (bool(bases & 1), bool(bases & 2), bool(bases & 4))
         state = GameState(inning, half, outs, home, away, runners)
-        matchup = Matchup(
-            lineup=tuple(_ability(s, True, events) for s in players.get("lineup", [])),
-            pitcher=_ability(players.get("pitcher"), False, events) or AVERAGE,
-            pinch_hitter=_ability(players.get("pinch_hitter"), True, events),
-            reliever=_ability(players.get("reliever"), False, events),
+        lineup = tuple(_ability(s, True, events) for s in players.get("lineup", []))
+        pitcher = _ability(players.get("pitcher"), False, events) or AVERAGE
+        pinch_hitter = _ability(players.get("pinch_hitter"), True, events)
+        reliever = _ability(players.get("reliever"), False, events)
+        batter = lineup[0] if lineup else AVERAGE
+        roles = {
+            "batter_pitcher": (batter, pitcher),
+            "pinch_pitcher": (pinch_hitter, pitcher),
+            "batter_reliever": (batter, reliever),
+        }
+        records = tuple(
+            (*roles[key], StatLine(**line)) for key, line in players.get("h2h", {}).items()
         )
+        matchup = Matchup(lineup, pitcher, pinch_hitter, reliever, records)
         ev = evaluate(name, state, model, table, events, matchup)
         cases.append({
             "type": name,
@@ -149,6 +184,9 @@ def build_data(model: WinProbabilityModel, table: TacticTable, events: EventTabl
         },
         "pseudo": {"batter": BATTER_PSEUDO_PA, "pitcher": PITCHER_PSEUDO_PA,
                    "pitcherBip": PITCHER_PSEUDO_BIP},
+        "platoon": events.platoon,
+        "h2hPseudo": events.h2h_pseudo,
+        "h2hSummary": events.h2h_summary,
         "profiles": {
             "batter": [{"label": a.label, "ratios": dict(a.ratios)} for a in events.batter_profiles],
             "pitcher": [{"label": a.label, "ratios": dict(a.ratios)} for a in events.pitcher_profiles],

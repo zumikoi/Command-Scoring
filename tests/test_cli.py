@@ -45,3 +45,41 @@ def test_league_line_changes_the_baseline(table):
 def test_unknown_profile_is_an_error(table):
     with pytest.raises(KeyError):
         parse_matchup({"打者": "伝説の強打者"}, table)
+
+
+def test_hands_attach_to_profiles_and_lines(table):
+    raw = {
+        "打者": {"型": "強打者（上位10%）", "左右": "両"},
+        "投手": {"打者": 500, "被安打": 110, "被本塁打": 10, "与四球": 30, "奪三振": 120, "左右": "左"},
+    }
+
+    matchup = parse_matchup(raw, table)
+
+    assert matchup.lineup[0].hand == "S"
+    assert matchup.lineup[0].ratio("HR") == 1.6
+    assert matchup.pitcher.hand == "L"
+
+
+def test_a_pitcher_cannot_be_a_switch_thrower(table):
+    with pytest.raises(ValueError, match="左右"):
+        parse_matchup({"投手": {"型": "エース級（上位10%）", "左右": "両"}}, table)
+
+
+def test_head_to_head_records_bind_to_the_named_players(table):
+    raw = {
+        "打者": "強打者（上位10%）",
+        "投手": "エース級（上位10%）",
+        "継投": "エース級（上位10%）",
+        "対戦成績": {"打者×投手": {"打席": 12, "安打": 1, "本塁打": 0, "四球": 0, "三振": 7}},
+    }
+
+    matchup = parse_matchup(raw, table)
+
+    (batter, pitcher, record), = matchup.head_to_head
+    assert batter is matchup.lineup[0] and pitcher is matchup.pitcher
+    assert record.so == 7
+
+
+def test_head_to_head_needs_the_players(table):
+    with pytest.raises(ValueError, match="代打×投手"):
+        parse_matchup({"対戦成績": {"代打×投手": {"打席": 5, "安打": 1, "本塁打": 0, "四球": 0, "三振": 1}}}, table)

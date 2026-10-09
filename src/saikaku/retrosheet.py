@@ -67,6 +67,9 @@ class Play:
     batter: str = ""
     pitcher: str = ""
     season: str = ""
+    #: ``R``, ``L``, or ``B`` for a switch hitter (the side is not recorded).
+    bat_hand: str = ""
+    pit_hand: str = ""
 
 
 def _occupied(value: str) -> bool:
@@ -145,6 +148,8 @@ def _to_play(row: dict[str, str]) -> Play:
         batter=row.get("batter", ""),
         pitcher=row.get("pitcher", ""),
         season=row.get("date", "")[:4],
+        bat_hand=row.get("bathand", ""),
+        pit_hand=row.get("pithand", ""),
     )
 
 

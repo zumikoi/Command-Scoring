@@ -8,6 +8,12 @@ transitions estimated from MLB play-by-play.
 Stat lines are typed in by the user; nothing here fetches player data. Small
 samples are pulled toward the league with pseudo plate appearances set near the
 point where each rate becomes about half signal, half noise.
+
+Two things refine a particular batter against a particular pitcher. The
+platoon effect depends only on which hand each uses. A head-to-head record is
+compared with what the two players' abilities predict for each other, and only
+the part the data says is real is kept: the pseudo plate appearances for that
+are measured from play-by-play (see ``events.measure_head_to_head``).
 """
 
 from __future__ import annotations
@@ -36,10 +42,16 @@ PITCHER_KEYS = {
 }
 
 
+#: Hand codes. A switch hitter always bats from the side opposite the pitcher.
+HANDS = {"右": "R", "左": "L", "両": "S"}
+
+
 @dataclass(frozen=True)
 class Ability:
     ratios: Mapping[str, float] = field(default_factory=lambda: {e: 1.0 for e in EVENTS})
     label: str = "リーグ平均"
+    #: ``R``, ``L``, ``S`` (switch, batters only), or None when unknown.
+    hand: str | None = None
 
     def ratio(self, event: str) -> float:
         return self.ratios.get(event, 1.0)
@@ -181,15 +193,71 @@ def pitcher_ability(line: StatLine, league: Mapping[str, float], label: str = ""
     return _ratios(rates, league, label or "成績から推定")
 
 
+def platoon_side(batter_hand: str | None, pitcher_hand: str | None) -> str | None:
+    """``"same"`` or ``"opposite"`` handedness, or None if either is unknown."""
+
+    if not batter_hand or not pitcher_hand or pitcher_hand not in ("R", "L"):
+        return None
+    if batter_hand in ("S", "B"):
+        return "opposite"
+    return "same" if batter_hand == pitcher_hand else "opposite"
+
+
 def matchup(
-    base_rates: Mapping[str, float], batter: Ability, pitcher: Ability
+    base_rates: Mapping[str, float],
+    batter: Ability,
+    pitcher: Ability,
+    platoon: Mapping[str, Mapping[str, float]] | None = None,
+    head_to_head: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     """Outcome probabilities for one batter against one pitcher.
 
     Multiplying the league odds by both players' ratios and renormalising is
-    the multinomial form of the log5 method.
+    the multinomial form of the log5 method. ``platoon`` maps a side to
+    per-outcome multipliers; ``head_to_head`` is a set of multipliers from
+    :func:`head_to_head_factors`.
     """
 
-    weights = {e: base_rates.get(e, 0.0) * batter.ratio(e) * pitcher.ratio(e) for e in EVENTS}
+    side = platoon_side(batter.hand, pitcher.hand)
+    hand = platoon.get(side, {}) if platoon and side else {}
+    pair = head_to_head or {}
+    weights = {
+        e: base_rates.get(e, 0.0) * batter.ratio(e) * pitcher.ratio(e)
+        * hand.get(e, 1.0) * pair.get(e, 1.0)
+        for e in EVENTS
+    }
     total = sum(weights.values())
     return {e: w / total for e, w in weights.items()}
+
+
+def head_to_head_factors(
+    line: StatLine, expected: Mapping[str, float], pseudo: Mapping[str, float]
+) -> dict[str, float]:
+    """Multipliers that move ``expected`` toward a head-to-head record.
+
+    Each outcome's rate is regressed to the expectation with ``pseudo`` plate
+    appearances, so a short record moves it only as far as such records have
+    been found to predict. Without a doubles and triples split, singles,
+    doubles and triples are regressed together and keep the expected mix.
+    """
+
+    counts = line.counts()
+    pa = line.unintentional_pa
+    if pa <= 0:
+        return {e: 1.0 for e in EVENTS}
+
+    def regress(observed: float, rate: float, k: float) -> float:
+        return (observed + k * rate) / (pa + k)
+
+    rates = {e: regress(counts[e], expected[e], pseudo[e]) for e in ("K", "BB", "HR")}
+    if counts["2B"] is None:
+        hit_rate = sum(expected[e] for e in ("1B", "2B", "3B"))
+        k = sum(pseudo[e] * expected[e] for e in ("1B", "2B", "3B")) / hit_rate
+        hits = regress(counts["H"] - counts["HR"], hit_rate, k)
+        for e in ("1B", "2B", "3B"):
+            rates[e] = hits * expected[e] / hit_rate
+    else:
+        for e in ("1B", "2B", "3B"):
+            rates[e] = regress(counts[e], expected[e], pseudo[e])
+    rates["OUT"] = max(1.0 - sum(rates.values()), 1e-9)
+    return {e: rates[e] / expected[e] for e in EVENTS}

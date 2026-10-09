@@ -10,9 +10,11 @@ from saikaku.abilities import (
     Ability,
     StatLine,
     batter_ability,
+    head_to_head_factors,
     league_rates,
     matchup,
     pitcher_ability,
+    platoon_side,
 )
 from saikaku.events import _profiles
 
@@ -117,3 +119,46 @@ def test_profiles_are_ordered_best_first():
 
     assert batters[0].ratio("HR") > batters[-1].ratio("HR")
     assert pitchers[0].ratio("HR") < pitchers[-1].ratio("HR")
+
+
+@pytest.mark.parametrize(
+    "bat, pit, side",
+    [("R", "R", "same"), ("L", "R", "opposite"), ("L", "L", "same"),
+     ("S", "L", "opposite"), ("B", "R", "opposite"), (None, "R", None), ("R", None, None)],
+)
+def test_platoon_side(bat, pit, side):
+    assert platoon_side(bat, pit) == side
+
+
+def test_platoon_applies_only_when_both_hands_are_known():
+    platoon = {"same": {**{e: 1.0 for e in EVENTS}, "HR": 0.5}}
+    righty = Ability(hand="R")
+
+    assert matchup(LEAGUE, righty, Ability(hand="R"), platoon)["HR"] < LEAGUE["HR"]
+    assert matchup(LEAGUE, righty, AVERAGE, platoon)["HR"] == pytest.approx(LEAGUE["HR"])
+
+
+def test_head_to_head_moves_rates_by_the_measured_weight():
+    pseudo = {e: 100 for e in EVENTS}
+    record = StatLine(pa=20, h=2, doubles=0, triples=0, hr=0, bb=0, hbp=0, so=10)
+
+    factors = head_to_head_factors(record, LEAGUE, pseudo)
+
+    expected_k = (10 + 100 * LEAGUE["K"]) / 120
+    assert factors["K"] == pytest.approx(expected_k / LEAGUE["K"])
+    assert factors["HR"] < 1.0
+
+
+def test_head_to_head_without_signal_changes_nothing():
+    pseudo = {e: 1_000_000 for e in EVENTS}
+    record = StatLine(pa=30, h=15, hr=6, bb=5, hbp=0, so=0)
+
+    factors = head_to_head_factors(record, LEAGUE, pseudo)
+
+    assert all(f == pytest.approx(1.0, abs=1e-3) for f in factors.values())
+
+
+def test_empty_head_to_head_record_is_neutral():
+    record = StatLine(pa=0, h=0, hr=0, bb=0, hbp=0, so=0)
+
+    assert head_to_head_factors(record, LEAGUE, {e: 10 for e in EVENTS}) == {e: 1.0 for e in EVENTS}

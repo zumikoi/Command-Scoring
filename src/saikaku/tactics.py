@@ -20,8 +20,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .abilities import AVERAGE, Ability
-from .events import LINEUP_DEPTH, EventTable
+from .abilities import AVERAGE, Ability, StatLine
+from .events import LINEUP_DEPTH, EventTable, PairLookup
 from .model import GameState, WinProbabilityModel
 from .retrosheet import Play
 from .runs import base_index, state_key
@@ -84,6 +84,17 @@ class Matchup:
     pitcher: Ability = AVERAGE
     pinch_hitter: Ability | None = None
     reliever: Ability | None = None
+    #: Head-to-head records as (batter, pitcher, record), matched by identity.
+    head_to_head: tuple[tuple[Ability, Ability, StatLine], ...] = ()
+
+    def pair_lookup(self, events: EventTable) -> PairLookup | None:
+        if not self.head_to_head:
+            return None
+        factors = {
+            (id(batter), id(pitcher)): events.pair_factors(batter, pitcher, record)
+            for batter, pitcher, record in self.head_to_head
+        }
+        return lambda batter, pitcher: factors.get((id(batter), id(pitcher)))
 
     def batters(self, start: int = 0) -> tuple[Ability, ...]:
         """Batters ``start`` .. ``LINEUP_DEPTH - 1``, unknown ones league average."""
@@ -215,6 +226,7 @@ def expected_probability(
     events: EventTable,
     lineup: tuple[Ability, ...],
     pitcher: Ability,
+    pairs: PairLookup | None = None,
 ) -> float:
     """The batting team's win probability after ``start`` and then ``lineup``."""
 
@@ -223,7 +235,7 @@ def expected_probability(
         if o == 3:
             total += p * model.probability(after(state, o, b, r))
             continue
-        for (o2, b2, r2), q in events.forward(o, b, lineup, pitcher).items():
+        for (o2, b2, r2), q in events.forward(o, b, lineup, pitcher, pairs).items():
             total += p * q * model.probability(after(state, o2, b2, r + r2))
     return total
 
@@ -280,10 +292,13 @@ def evaluate(
     def side(probability: float) -> float:
         return probability if kind.by_offense else 1.0 - probability
 
+    pairs = matchup.pair_lookup(events)
     chosen = expected_probability(
-        model, state, chosen_start, events, chosen_lineup, chosen_pitcher
+        model, state, chosen_start, events, chosen_lineup, chosen_pitcher, pairs
     )
-    alternative = expected_probability(model, state, stay, events, current, matchup.pitcher)
+    alternative = expected_probability(
+        model, state, stay, events, current, matchup.pitcher, pairs
+    )
     return Evaluation(
         decision_type=decision_type,
         chosen=kind.chosen,
