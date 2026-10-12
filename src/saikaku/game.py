@@ -393,15 +393,21 @@ def score_game(
             if decision_type not in ("代打", "継投"):
                 alternative = row.call
             results.append(ScoredRow(
-                row, team, -ev.value, alternative, chosen,
+                row, team, _points(-ev.value), alternative, chosen,
                 ev.alternative_probability, ev.chosen_probability,
             ))
         else:
             results.append(ScoredRow(
-                row, team, ev.value, chosen, alternative,
+                row, team, _points(ev.value), chosen, alternative,
                 ev.chosen_probability, ev.alternative_probability,
             ))
     return results
+
+
+def _points(value: float) -> float:
+    """Round to the 0.1pt shown everywhere, so verdicts and totals match the table."""
+
+    return round(value, 1) + 0.0  # + 0.0 turns -0.0 into 0.0
 
 
 def _explain(error: Exception) -> str:

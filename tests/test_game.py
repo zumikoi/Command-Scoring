@@ -141,3 +141,12 @@ def test_bad_rows_say_what_is_wrong(table, broken, message):
 
     with pytest.raises(GameFormatError, match=message):
         parse_game(text, table)
+
+
+def test_points_are_rounded_so_the_verdict_matches_the_display(model, table):
+    rows = score_game(parse_game(GAME, table), model, SURE_BUNT, table)
+
+    for r in rows:
+        if r.value is not None:
+            assert r.value == round(r.value, 1)
+            assert (r.verdict == "互角") == (abs(r.value) < 0.5)
