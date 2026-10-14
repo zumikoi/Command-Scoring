@@ -150,3 +150,14 @@ def test_points_are_rounded_so_the_verdict_matches_the_display(model, table):
         if r.value is not None:
             assert r.value == round(r.value, 1)
             assert (r.verdict == "互角") == (abs(r.value) < 0.5)
+
+
+def test_batters_faced_column_is_read(table):
+    text = GAME.replace("| 代わり | メモ |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+                        "| 代わり | メモ | 投手の打者数 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    text = text.replace("| 丁 |  | 成功 |", "| 丁 |  | 成功 | 21 |")
+
+    game = parse_game(text, table)
+
+    assert game.decisions[0].pitcher_faced == 21
+    assert game.decisions[1].pitcher_faced is None

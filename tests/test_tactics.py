@@ -158,3 +158,20 @@ def test_json_round_trip():
     restored = TacticTable.from_json(table.to_json())
 
     assert restored.counts["bunt"] == table.counts["bunt"]
+
+
+
+def test_a_fresh_reliever_beats_a_tired_starter_of_the_same_quality(model, events):
+    from dataclasses import replace
+
+    tired = {**{e: 1.0 for e in EVENTS}, "HR": 1.5, "1B": 1.2}
+    table = replace(events, fatigue={"1": {e: 1.0 for e in EVENTS}, "3": tired}, _cache={})
+    starter, reliever = Ability(label="先発"), Ability(label="中継ぎ")
+
+    late = evaluate("継投", state(), model, SURE_BUNT, table,
+                    Matchup(pitcher=starter, reliever=reliever, pitcher_faced=20))
+    unknown = evaluate("継投", state(), model, SURE_BUNT, table,
+                       Matchup(pitcher=starter, reliever=reliever))
+
+    assert late.value > 0.5
+    assert unknown.value == pytest.approx(0.0)

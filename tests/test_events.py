@@ -3,7 +3,7 @@ from collections import Counter
 import pytest
 
 from saikaku.abilities import AVERAGE, EVENTS, Ability
-from saikaku.events import EventTable, measure_head_to_head
+from saikaku.events import EventTable, measure_fatigue, measure_head_to_head, trip_through_order
 from saikaku.retrosheet import Play
 from saikaku.runs import Transition
 
@@ -111,3 +111,42 @@ def test_forward_uses_head_to_head_for_the_matching_pair(events):
     without = events.forward(2, 0, (POWER,), AVERAGE)
 
     assert with_pair[(3, 0, 0)] > without[(3, 0, 0)]
+
+
+
+def test_trips_through_the_order():
+    assert [trip_through_order(n) for n in (0, 8, 9, 17, 18, 26, 27, 40)] == [1, 1, 2, 2, 3, 3, 4, 4]
+
+
+def test_fatigue_changes_the_lookahead_only_when_batters_faced_is_known(events):
+    from dataclasses import replace
+
+    tired = {**{e: 1.0 for e in EVENTS}, "HR": 2.0}
+    table = replace(events, fatigue={"1": {e: 1.0 for e in EVENTS}, "3": tired}, _cache={})
+
+    fresh = table.forward(0, 0, (AVERAGE,), AVERAGE, batters_faced=0)
+    third_time = table.forward(0, 0, (AVERAGE,), AVERAGE, batters_faced=20)
+    unknown = table.forward(0, 0, (AVERAGE,), AVERAGE)
+
+    def runs(ends):
+        return sum(r * p for (_, _, r), p in ends.items())
+
+    assert runs(third_time) > runs(fresh)
+    assert runs(unknown) == pytest.approx(runs(fresh))
+
+
+def test_fatigue_measurement_recovers_a_planted_effect():
+    league = {"K": 0.2, "BB": 0.1, "1B": 0.15, "2B": 0.05, "3B": 0.01, "HR": 0.03, "OUT": 0.46}
+    season_line = Counter({e: round(r * 1000) for e, r in league.items()})
+    batters = {("2024", "b"): season_line}
+    pitchers = {("2024", "p"): season_line}
+    plays = []
+    for trip, hr_share in ((1, 0.02), (3, 0.04)):
+        n = 5000
+        hrs = int(n * hr_share)
+        plays += [("2024", "b", "p", trip, None, "HR")] * hrs
+        plays += [("2024", "b", "p", trip, None, "OUT")] * (n - hrs)
+
+    fatigue = measure_fatigue(plays, batters, pitchers, league, {})
+
+    assert fatigue["3"]["HR"] == pytest.approx(2 * fatigue["1"]["HR"], rel=0.01)

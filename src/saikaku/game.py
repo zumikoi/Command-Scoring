@@ -84,6 +84,8 @@ class DecisionRow:
     pitcher: str = ""
     substitute: str = ""
     note: str = ""
+    #: Batters the pitcher had faced this game before this moment, if known.
+    pitcher_faced: int | None = None
 
 
 @dataclass(frozen=True)
@@ -306,6 +308,7 @@ def parse_game(text: str, events: EventTable) -> Game:
                 pitcher=row.get("投手", ""),
                 substitute=row.get("代わり", ""),
                 note=row.get("メモ", ""),
+                pitcher_faced=_int(row.get("投手の打者数", ""), f"#{number} 投手の打者数"),
             )
         )
         substitute_bats = call in ("代打", "代打なし")
@@ -373,7 +376,7 @@ def score_game(
             for bn, pn, b, p in pairs
             if (bn, pn) in game.head_to_head
         )
-        matchup = Matchup(lineup, pitcher, pinch, reliever, records)
+        matchup = Matchup(lineup, pitcher, pinch, reliever, records, row.pitcher_faced)
 
         if decision_type in ("代打", "継投") and not row.substitute:
             results.append(ScoredRow(row, team, problem="「代わり」に交代要員の名前が必要です"))
@@ -519,6 +522,7 @@ def render_report(
         "## 前提",
         "",
         "- 勝率は両チームを平均的な戦力とし、打席の打者から3人目まではこの試合で指定した打者・投手・左右・対戦成績で計算しています",
+        "- 「投手の打者数」を書いた場面では、投手が打順の何巡目に当たっているか（疲れ・慣れ）も反映しています。継投で出てくる投手は投げ始めとして扱います",
         "- 得点の起こりやすさはMLB 2022〜2024年（Retrosheet）から推定しており、NPBの得点環境との差は補正していません",
         f"- 「互角」は差が±{EVEN_MARGIN}pt未満のもの（表示上の区切りで、統計的な基準ではありません）",
         f"- {ATTRIBUTION}",

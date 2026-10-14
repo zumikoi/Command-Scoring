@@ -63,6 +63,16 @@ End = tuple[int, int, int]  # outs, bases, runs
 #: Looks up head-to-head multipliers for a batter and pitcher, if any.
 PairLookup = Callable[[Ability, Ability], Mapping[str, float] | None]
 
+#: Batters per trip through the order, and the last trip measured separately.
+ORDER_LENGTH = 9
+MAX_TRIP = 4
+
+
+def trip_through_order(batters_faced: int) -> int:
+    """1 for the first nine batters a pitcher faces, 2 for the next nine, ... up to 4."""
+
+    return min(batters_faced // ORDER_LENGTH + 1, MAX_TRIP)
+
 
 @dataclass(frozen=True)
 class EventTable:
@@ -79,6 +89,9 @@ class EventTable:
     h2h_pseudo: dict[str, float] = field(default_factory=dict)
     #: How the head-to-head pseudo counts were measured, for display.
     h2h_summary: dict = field(default_factory=dict)
+    #: Per-outcome multipliers by trip through the order ("1".."4"), relative
+    #: to what the pitcher's own season line predicts.
+    fatigue: dict[str, dict[str, float]] = field(default_factory=dict)
     source: str = ""
     _cache: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -90,7 +103,16 @@ class EventTable:
         pitchers: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         sides: dict[str, Counter[str]] = defaultdict(Counter)
         pairs: dict[tuple[str, str, str, str], Counter[str]] = defaultdict(Counter)
+        faced: Counter[tuple[str, str]] = Counter()
+        by_trip: list[tuple[str, str, str, int, str | None]] = []
         for play in plays:
+            if play.plate_appearance:
+                key = (play.game, play.pitcher)
+                trip = trip_through_order(faced[key])
+                faced[key] += 1
+                if play.event is not None:
+                    side = platoon_side(play.bat_hand, play.pit_hand)
+                    by_trip.append((play.season, play.batter, play.pitcher, trip, side, play.event))
             if play.event is None:
                 continue
             t = play.transition
@@ -116,6 +138,7 @@ class EventTable:
             for side, counter in sides.items()
         }
         h2h_pseudo, h2h_summary = measure_head_to_head(pairs)
+        fatigue = measure_fatigue(by_trip, batters, pitchers, league, platoon)
         return cls(
             rates={s: Counter(c) for s, c in rates.items()},
             transitions={e: {s: Counter(c) for s, c in by.items()} for e, by in transitions.items()},
@@ -125,6 +148,7 @@ class EventTable:
             platoon=platoon,
             h2h_pseudo=h2h_pseudo,
             h2h_summary=h2h_summary,
+            fatigue=fatigue,
             source=source,
         )
 
@@ -178,6 +202,22 @@ class EventTable:
         self._cache[key] = (result, batter, pitcher, pair)  # keep keys alive for id()
         return result
 
+    def _multipliers(
+        self, pair: Mapping[str, float] | None, batters_faced: int | None
+    ) -> Mapping[str, float] | None:
+        """Head-to-head and fatigue multipliers combined, one object per combination."""
+
+        trip = None if batters_faced is None else str(trip_through_order(batters_faced))
+        tired = self.fatigue.get(trip) if trip else None
+        if tired is None:
+            return pair
+        key = ("multipliers", id(pair), trip)
+        cached = self._cache.get(key)
+        if cached is None:
+            combined = {e: (pair or {}).get(e, 1.0) * tired.get(e, 1.0) for e in EVENTS}
+            cached = self._cache[key] = (combined, pair)
+        return cached[0]
+
     def forward(
         self,
         outs: int,
@@ -185,16 +225,22 @@ class EventTable:
         lineup: Sequence[Ability],
         pitcher: Ability = AVERAGE,
         pairs: PairLookup | None = None,
+        batters_faced: int | None = None,
     ) -> dict[End, float]:
         """Distribution of (outs, bases, runs) after the given batters have batted.
 
         The half inning may end before the lineup is used up; a third out is
-        absorbing.
+        absorbing. ``batters_faced`` is how many batters the pitcher has faced
+        this game before the first of these; when known, each plate appearance
+        is adjusted for the pitcher's trip through the order.
         """
 
         current: dict[End, float] = {(outs, bases, 0): 1.0}
-        for batter in lineup:
-            pair = pairs(batter, pitcher) if pairs else None
+        for i, batter in enumerate(lineup):
+            pair = self._multipliers(
+                pairs(batter, pitcher) if pairs else None,
+                None if batters_faced is None else batters_faced + i,
+            )
             following: dict[End, float] = defaultdict(float)
             for (o, b, r), p in current.items():
                 if o == 3:
@@ -225,6 +271,7 @@ class EventTable:
                 "platoon": self.platoon,
                 "h2h_pseudo": self.h2h_pseudo,
                 "h2h_summary": self.h2h_summary,
+                "fatigue": self.fatigue,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -245,6 +292,7 @@ class EventTable:
             platoon=raw.get("platoon", {}),
             h2h_pseudo=raw.get("h2h_pseudo", {}),
             h2h_summary=raw.get("h2h_summary", {}),
+            fatigue=raw.get("fatigue", {}),
             source=raw.get("source", ""),
         )
 
@@ -424,3 +472,44 @@ def measure_head_to_head(
         "log_loss_gain": gains,
     }
     return pseudo, summary
+
+
+def measure_fatigue(
+    plays: Iterable[tuple[str, str, str, int, str | None, str]],
+    batters: Mapping[tuple[str, str], Counter[str]],
+    pitchers: Mapping[tuple[str, str], Counter[str]],
+    league: Mapping[str, float],
+    platoon: Mapping[str, Mapping[str, float]],
+) -> dict[str, dict[str, float]]:
+    """How each outcome shifts with the pitcher's trip through the order.
+
+    Every plate appearance is compared with what the batter's and pitcher's
+    season lines (and their hands) predict for each other. The ratio of what
+    happened to what was predicted, per trip, is the multiplier: a pitcher's
+    own quality is already in the prediction, so the ratio isolates the trip.
+    """
+
+    batter_cache: dict[tuple[str, str], Ability] = {}
+    pitcher_cache: dict[tuple[str, str], Ability] = {}
+    observed: dict[int, Counter[str]] = defaultdict(Counter)
+    expected: dict[int, Counter[str]] = defaultdict(Counter)
+    for season, batter, pitcher, trip, side, event in plays:
+        b_key, p_key = (season, batter), (season, pitcher)
+        try:
+            if b_key not in batter_cache:
+                batter_cache[b_key] = batter_ability(_line(batters[b_key], True), league)
+            if p_key not in pitcher_cache:
+                pitcher_cache[p_key] = pitcher_ability(_line(pitchers[p_key], False), league)
+        except ValueError:
+            continue  # a line that cannot be estimated (only in degenerate leagues)
+        rates = matchup(
+            league, batter_cache[b_key], pitcher_cache[p_key],
+            head_to_head=platoon.get(side) if side else None,
+        )
+        observed[trip][event] += 1
+        for e in EVENTS:
+            expected[trip][e] += rates[e]
+    return {
+        str(trip): {e: observed[trip][e] / expected[trip][e] for e in EVENTS if expected[trip][e]}
+        for trip in sorted(observed)
+    }

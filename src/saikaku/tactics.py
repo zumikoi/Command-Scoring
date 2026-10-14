@@ -86,6 +86,9 @@ class Matchup:
     reliever: Ability | None = None
     #: Head-to-head records as (batter, pitcher, record), matched by identity.
     head_to_head: tuple[tuple[Ability, Ability, StatLine], ...] = ()
+    #: Batters the pitcher on the mound has faced this game before this
+    #: moment. None leaves fatigue out; a reliever always starts fresh.
+    pitcher_faced: int | None = None
 
     def pair_lookup(self, events: EventTable) -> PairLookup | None:
         if not self.head_to_head:
@@ -227,6 +230,7 @@ def expected_probability(
     lineup: tuple[Ability, ...],
     pitcher: Ability,
     pairs: PairLookup | None = None,
+    batters_faced: int | None = None,
 ) -> float:
     """The batting team's win probability after ``start`` and then ``lineup``."""
 
@@ -235,7 +239,9 @@ def expected_probability(
         if o == 3:
             total += p * model.probability(after(state, o, b, r))
             continue
-        for (o2, b2, r2), q in events.forward(o, b, lineup, pitcher, pairs).items():
+        for (o2, b2, r2), q in events.forward(
+            o, b, lineup, pitcher, pairs, batters_faced
+        ).items():
             total += p * q * model.probability(after(state, o2, b2, r + r2))
     return total
 
@@ -293,11 +299,18 @@ def evaluate(
         return probability if kind.by_offense else 1.0 - probability
 
     pairs = matchup.pair_lookup(events)
+    faced = matchup.pitcher_faced
+    if kind.chosen == "relief":
+        chosen_faced = None if faced is None else 0
+    elif faced is not None and kind.ends_plate_appearance:
+        chosen_faced = faced + 1
+    else:
+        chosen_faced = faced
     chosen = expected_probability(
-        model, state, chosen_start, events, chosen_lineup, chosen_pitcher, pairs
+        model, state, chosen_start, events, chosen_lineup, chosen_pitcher, pairs, chosen_faced
     )
     alternative = expected_probability(
-        model, state, stay, events, current, matchup.pitcher, pairs
+        model, state, stay, events, current, matchup.pitcher, pairs, faced
     )
     return Evaluation(
         decision_type=decision_type,
