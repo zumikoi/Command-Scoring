@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | [Retrosheet](https://www.retrosheet.org/) の[パース済みプレーデータ](https://www.retrosheet.org/downloads/plays.html)（MLB） | 走者・アウト状態の遷移から、半イニングの残り得点分布を推定する | [利用条件](https://www.retrosheet.org/notice.txt)は帰属表示のみ。売却・再配布・商用も可。公開物には次の文言を必ず付ける |
 | 自分で観た試合の記録（NPB） | 評価する采配そのもの（イニング・点差・アウト・走者・選んだ作戦） | 自分で観察した事実を自分で書き起こす。他サイトの文章・画像・速報文は写さない |
-| 選手の成績（手入力） | 打者・投手の力の推定 | ユーザーが自分で調べて入力する。ツールは取得・保存・配布しない。数字の出どころと公開時の扱いはユーザーの判断 |
+| 選手の成績（書き写し） | 打者・投手の力の推定 | **2026-10-14 方針変更**：ユーザーが入力しない代わりに、Claudeが公開ページを読んで試合ノートに書き写してよい（ユーザー決定）。ツール（コード）は取得しない。試合ノートはgit対象外のまま、成績の数字そのものは投稿に出さない。出どころは試合ノートに書く |
 
 > The information used here was obtained free of charge from and is copyrighted by Retrosheet. Interested parties may contact Retrosheet at "www.retrosheet.org".
 

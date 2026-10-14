@@ -161,3 +161,19 @@ def test_batters_faced_column_is_read(table):
 
     assert game.decisions[0].pitcher_faced == 21
     assert game.decisions[1].pitcher_faced is None
+
+
+def test_intentional_walks_column_is_taken_out_of_walks(table):
+    separator = "| --- " * 12 + "|"
+    text = GAME.replace(
+        "| 四球 | 死球 | 三振 |\n" + separator,
+        "| 四球 | 死球 | 三振 | 敬遠 |\n" + separator + " --- |",
+        1,
+    )
+    text = text.replace("| 丙 | 投 | 左 |  | 500 | 100 |  |  | 8 | 30 | 3 | 140 |",
+                        "| 丙 | 投 | 左 |  | 500 | 100 |  |  | 8 | 30 | 3 | 140 | 10 |")
+
+    game = parse_game(text, table)
+    plain = parse_game(GAME, table)
+
+    assert game.players[("丙", False)].ability.ratio("BB") < plain.players[("丙", False)].ability.ratio("BB")

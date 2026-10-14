@@ -58,7 +58,7 @@ NOT_TAKEN = {
 
 #: A player's stat columns. Pitcher rows read 打席 as batters faced, 安打 as
 #: hits allowed and so on; doubles and triples may be left blank.
-STAT_COLUMNS = ("打席", "安打", "二塁打", "三塁打", "本塁打", "四球", "死球", "三振")
+STAT_COLUMNS = ("打席", "安打", "二塁打", "三塁打", "本塁打", "四球", "死球", "三振", "敬遠")
 
 _BASE_CHARS = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2}
 
@@ -222,7 +222,7 @@ def _stat_line(row: Mapping[str, str], what: str) -> StatLine | None:
     if all(v is None for v in values.values()):
         return None
     raw = {BATTER_KEYS[key]: values[BATTER_KEYS[key]] for key in
-           ("pa", "h", "doubles", "triples", "hr", "bb", "hbp", "so")}
+           ("pa", "h", "doubles", "triples", "hr", "bb", "hbp", "so", "ibb")}
     try:
         return StatLine.from_mapping(raw, BATTER_KEYS)
     except ValueError as error:
