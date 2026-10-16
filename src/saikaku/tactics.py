@@ -79,6 +79,16 @@ DECISION_TYPES = {
 
 
 @dataclass(frozen=True)
+class PitcherChange:
+    """A pinch hitter for the team's own pitcher means a new pitcher next inning."""
+
+    staying: Ability
+    #: Batters the pitcher being hit for has faced this game, if known.
+    staying_faced: int | None
+    replacement: Ability
+
+
+@dataclass(frozen=True)
 class Matchup:
     """Who is involved: the order from the current batter on, and the pitchers."""
 
@@ -93,6 +103,8 @@ class Matchup:
     pitcher_faced: int | None = None
     #: Odds multiplier for a steal succeeding (see TacticTable.steal_odds).
     steal_odds: float = 1.0
+    #: Set when the batter being hit for is the team's pitcher.
+    pitcher_change: PitcherChange | None = None
 
     def pair_lookup(self, events: EventTable) -> PairLookup | None:
         if not self.head_to_head:
@@ -309,6 +321,9 @@ class Evaluation:
     alternative_probability: float
     chosen_samples: int
     alternative_samples: int
+    #: Part of the chosen side's probability that comes from changing pitchers
+    #: next inning (pinch hitting for the pitcher), in points.
+    pitching_change: float = 0.0
 
     @property
     def value(self) -> float:
@@ -365,6 +380,10 @@ def evaluate(
     alternative = expected_probability(
         model, state, stay, events, current, matchup.pitcher, pairs, faced
     )
+    change = 0.0
+    if kind.chosen == "pinch" and matchup.pitcher_change is not None:
+        change = next_inning_pitching_gain(model, state, events, matchup.pitcher_change)
+        chosen += change
     return Evaluation(
         decision_type=decision_type,
         chosen=kind.chosen,
@@ -373,7 +392,32 @@ def evaluate(
         alternative_probability=side(alternative),
         chosen_samples=table.samples(kind.chosen, state.outs, bases),
         alternative_samples=events.samples(state.outs, bases),
+        pitching_change=change * 100,
     )
+
+
+def next_inning_pitching_gain(
+    model: WinProbabilityModel, state: GameState, events: EventTable, change: PitcherChange
+) -> float:
+    """What a fresh pitcher next half inning is worth over keeping the current one.
+
+    Measured for the team now batting, at the start of the next half inning
+    with the score as it stands; the opponent's batters there are unknown and
+    taken as league average. Positive when the replacement is the better bet,
+    for instance against a starter going through the order a third time.
+    """
+
+    next_half = state.next_half_inning()
+    start = [(0, 0, 0, 1.0)]
+    batters = (AVERAGE,) * LINEUP_DEPTH
+    fresh = None if change.staying_faced is None else 0
+    opponent_keep = expected_probability(
+        model, next_half, start, events, batters, change.staying, None, change.staying_faced
+    )
+    opponent_new = expected_probability(
+        model, next_half, start, events, batters, change.replacement, None, fresh
+    )
+    return opponent_keep - opponent_new
 
 
 def measure_runner_pseudo(runners: dict[tuple[str, str], list[int]]) -> float:

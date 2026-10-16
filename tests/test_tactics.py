@@ -221,3 +221,28 @@ def test_runner_pseudo_is_small_when_records_repeat_and_large_when_they_do_not()
 
     assert measure_runner_pseudo(steady) < 30
     assert measure_runner_pseudo(noisy) > 200
+
+
+
+def test_pinch_hitting_for_a_tired_starter_gains_a_fresh_pitcher(model, events):
+    from dataclasses import replace
+
+    from saikaku.tactics import PitcherChange
+
+    tired = {**{e: 1.0 for e in EVENTS}, "HR": 1.6, "1B": 1.2}
+    table = replace(events, fatigue={"1": {e: 1.0 for e in EVENTS}, "3": tired, "4": tired}, _cache={})
+    starter, reliever = Ability(label="先発"), Ability(label="中継ぎ")
+    plain = Matchup((WEAK,), pinch_hitter=AVERAGE)
+    tired_starter = replace(plain, pitcher_change=PitcherChange(starter, 24, reliever))
+    ace_starter = replace(plain, pitcher_change=PitcherChange(ACE, 0, WEAK_PITCHER))
+
+    base = evaluate("代打", state(), model, SURE_BUNT, table, plain)
+    for_tired = evaluate("代打", state(), model, SURE_BUNT, table, tired_starter)
+    for_ace = evaluate("代打", state(), model, SURE_BUNT, table, ace_starter)
+
+    assert for_tired.pitching_change > 0
+    assert for_tired.value > base.value
+    assert for_ace.pitching_change < 0
+
+
+WEAK_PITCHER = Ability({**{e: 1.0 for e in EVENTS}, "K": 0.6, "BB": 1.5, "HR": 1.6}, "weak pitcher")

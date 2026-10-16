@@ -42,6 +42,7 @@ from .tactics import (
     TACTIC_NAMES,
     InsufficientData,
     Matchup,
+    PitcherChange,
     TacticTable,
     evaluate,
 )
@@ -90,6 +91,10 @@ class DecisionRow:
     pitcher_faced: int | None = None
     #: Who ran, for steals.
     runner: str = ""
+    #: For a pinch hitter batting for the pitcher: who pitched next inning,
+    #: and how many batters the pitcher being hit for had faced.
+    next_pitcher: str = ""
+    removed_faced: int | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,8 @@ class ScoredRow:
     chosen_probability: float | None = None
     alternative_probability: float | None = None
     problem: str = ""
+    #: Explanatory note added by the scorer, e.g. the pitching-change share.
+    detail: str = ""
 
     @property
     def verdict(self) -> str:
@@ -328,6 +335,8 @@ def parse_game(text: str, events: EventTable) -> Game:
                 note=row.get("メモ", ""),
                 pitcher_faced=_int(row.get("投手の打者数", ""), f"#{number} 投手の打者数"),
                 runner=row.get("走者名", ""),
+                next_pitcher=row.get("次の投手", ""),
+                removed_faced=_int(row.get("降板投手の打者数", ""), f"#{number} 降板投手の打者数"),
             )
         )
         substitute_bats = call in ("代打", "代打なし")
@@ -402,8 +411,13 @@ def score_game(
         if decision_type in ("二盗", "三盗"):
             runner = game.players.get((row.runner, True)) if row.runner else None
             steal_odds = table.steal_odds(game.league_steals, runner.steals if runner else None)
+        change = None
+        if decision_type == "代打" and row.next_pitcher:
+            change = PitcherChange(
+                ability(row.batter, False), row.removed_faced, ability(row.next_pitcher, False)
+            )
         matchup = Matchup(
-            lineup, pitcher, pinch, reliever, records, row.pitcher_faced, steal_odds
+            lineup, pitcher, pinch, reliever, records, row.pitcher_faced, steal_odds, change
         )
 
         if decision_type in ("代打", "継投") and not row.substitute:
@@ -416,6 +430,8 @@ def score_game(
             continue
 
         chosen, alternative = TACTIC_NAMES[ev.chosen], TACTIC_NAMES[ev.alternative]
+        share = -ev.pitching_change if declined else ev.pitching_change
+        detail = f"うち次の回の投手交代 {share:+.1f}pt" if ev.pitching_change else ""
         if decision_type == "代打":
             chosen, alternative = f"代打 {row.substitute}", f"{row.batter or '打者'}のまま"
         if decision_type == "継投":
@@ -425,12 +441,12 @@ def score_game(
                 alternative = row.call
             results.append(ScoredRow(
                 row, team, _points(-ev.value), alternative, chosen,
-                ev.alternative_probability, ev.chosen_probability,
+                ev.alternative_probability, ev.chosen_probability, detail=detail,
             ))
         else:
             results.append(ScoredRow(
                 row, team, _points(ev.value), chosen, alternative,
-                ev.chosen_probability, ev.alternative_probability,
+                ev.chosen_probability, ev.alternative_probability, detail=detail,
             ))
     return results
 
@@ -539,7 +555,7 @@ def render_report(
             f"| {r.row.number} | {_scene(r.row.state)} | {r.team} | {r.row.call} "
             f"| {r.chosen_label} {r.chosen_probability:.1%} "
             f"| {r.alternative_label} {r.alternative_probability:.1%} "
-            f"| {r.value:+.1f} | {r.verdict} | {r.row.note} |"
+            f"| {r.value:+.1f} | {r.verdict} | {'。'.join(x for x in (r.detail, r.row.note) if x)} |"
         )
 
     if game.warnings:
@@ -551,6 +567,7 @@ def render_report(
         "",
         "- 勝率は両チームを平均的な戦力とし、打席の打者から3人目まではこの試合で指定した打者・投手・左右・対戦成績で計算しています",
         "- 盗塁は、リーグ平均に盗塁・盗塁刺を書いた試合ではそのリーグの成功率に、「走者名」と選手の盗塁成績を書いた場面ではその走者の成功率（リーグ平均に寄せて見積もる）に合わせています",
+        "- 投手に代打を出す場面で「次の投手」を書くと、次の回を続投した場合と代わった投手の場合の差も代打の損得に含めます（相手打者は平均として計算）",
         "- 「投手の打者数」を書いた場面では、投手が打順の何巡目に当たっているか（疲れ・慣れ）も反映しています。継投で出てくる投手は投げ始めとして扱います",
         "- 得点の起こりやすさはMLB 2022〜2024年（Retrosheet）から推定しており、NPBの得点環境との差は補正していません",
         f"- 「互角」は差が±{EVEN_MARGIN}pt未満のもの（表示上の区切りで、統計的な基準ではありません）",
