@@ -115,7 +115,7 @@ def test_forward_uses_head_to_head_for_the_matching_pair(events):
 
 
 def test_trips_through_the_order():
-    assert [trip_through_order(n) for n in (0, 8, 9, 17, 18, 26, 27, 40)] == [1, 1, 2, 2, 3, 3, 4, 4]
+    assert [trip_through_order(n) for n in (0, 8, 9, 17, 18, 26, 27, 40)] == [1, 1, 2, 2, 3, 3, 3, 3]
 
 
 def test_fatigue_changes_the_lookahead_only_when_batters_faced_is_known(events):

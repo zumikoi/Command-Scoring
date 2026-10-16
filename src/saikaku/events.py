@@ -64,12 +64,15 @@ End = tuple[int, int, int]  # outs, bases, runs
 PairLookup = Callable[[Ability, Ability], Mapping[str, float] | None]
 
 #: Batters per trip through the order, and the last trip measured separately.
+#: A fourth trip is folded into the third: the starters allowed one are those
+#: pitching well that day, and that selection (fewer walks by 30%) swamped the
+#: fatigue it was meant to measure.
 ORDER_LENGTH = 9
-MAX_TRIP = 4
+MAX_TRIP = 3
 
 
 def trip_through_order(batters_faced: int) -> int:
-    """1 for the first nine batters a pitcher faces, 2 for the next nine, ... up to 4."""
+    """1 for the first nine batters a pitcher faces, 2 for the next nine, 3 after."""
 
     return min(batters_faced // ORDER_LENGTH + 1, MAX_TRIP)
 
