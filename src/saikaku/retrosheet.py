@@ -68,6 +68,8 @@ class Play:
     pitcher: str = ""
     season: str = ""
     game: str = ""
+    #: The runner who tried to steal, for steal attempts.
+    runner: str = ""
     #: ``R``, ``L``, or ``B`` for a switch hitter (the side is not recorded).
     bat_hand: str = ""
     pit_hand: str = ""
@@ -125,6 +127,15 @@ def _event(row: dict[str, str]) -> str:
     return "OUT"
 
 
+def _runner(row: dict[str, str]) -> str:
+    """The runner a lone steal attempt was made by, or "" for other plays."""
+
+    target = _steal_target(row)
+    if target is None:
+        return ""
+    return row.get(f"br{target - 1}_pre", "").strip()
+
+
 def _to_play(row: dict[str, str]) -> Play:
     plate_appearance = _flag(row, "pa")
     bunt_attempt = plate_appearance and (
@@ -150,6 +161,7 @@ def _to_play(row: dict[str, str]) -> Play:
         pitcher=row.get("pitcher", ""),
         season=row.get("date", "")[:4],
         game=row.get("gid", ""),
+        runner=_runner(row),
         bat_hand=row.get("bathand", ""),
         pit_hand=row.get("pithand", ""),
     )

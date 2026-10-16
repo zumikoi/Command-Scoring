@@ -175,3 +175,49 @@ def test_a_fresh_reliever_beats_a_tired_starter_of_the_same_quality(model, event
 
     assert late.value > 0.5
     assert unknown.value == pytest.approx(0.0)
+
+
+STEAL_TABLE = table_with(steal2={(0, 1): {(0, 2, 0): 80, (1, 0, 0): 20}})
+
+
+def test_steal_success_is_read_from_the_data():
+    assert STEAL_TABLE.steal_success() == pytest.approx(0.8)
+
+
+def test_steal_odds_match_the_league_and_regress_the_runner():
+    assert STEAL_TABLE.steal_odds() == 1.0
+    league = STEAL_TABLE.steal_odds((70, 30))
+    assert league == pytest.approx((0.7 / 0.3) / 4.0)
+
+    rows = STEAL_TABLE.outcomes("steal2", 0, 1, league)
+    assert dict(((o, b), p) for o, b, _, p in rows)[(0, 2)] == pytest.approx(0.7)
+
+    fast = STEAL_TABLE.steal_odds((70, 30), (19, 1))
+    assert league < fast < (0.95 / 0.05) / 4.0
+
+
+def test_slower_league_makes_a_steal_worth_less(model, events):
+    mlb = evaluate("二盗", state(), model, STEAL_TABLE, events)
+    npb = evaluate("二盗", state(), model, STEAL_TABLE, events,
+                   Matchup(steal_odds=STEAL_TABLE.steal_odds((70, 30))))
+
+    assert npb.value < mlb.value
+
+
+def test_runner_pseudo_is_small_when_records_repeat_and_large_when_they_do_not():
+    from saikaku.tactics import measure_runner_pseudo
+
+    steady = {}
+    noisy = {}
+    import random
+    rng = random.Random(3)
+    for i in range(200):
+        skill = 0.95 if i % 2 else 0.55
+        for season in ("2023", "2024"):
+            safe = sum(rng.random() < skill for _ in range(30))
+            steady[(season, f"r{i}")] = [safe, 30 - safe]
+            safe = sum(rng.random() < 0.75 for _ in range(30))
+            noisy[(season, f"r{i}")] = [safe, 30 - safe]
+
+    assert measure_runner_pseudo(steady) < 30
+    assert measure_runner_pseudo(noisy) > 200

@@ -24,7 +24,7 @@ NPBの**特定の試合の、特定の場面の判断**を、その時点の勝�
 | `src/saikaku/fit.py` | `src/saikaku/data/` の `run_distribution.json`・`tactics.json`・`events.json` を作る |
 | `src/saikaku/abilities.py` | 打者・投手の力（リーグ比）、成績からの推定と平均への寄せ、log5、左右、対戦成績の補正 |
 | `src/saikaku/events.py` | 打席結果7種ごとの遷移（`events.json`）、選手の型、左右の係数、対戦成績の寄せの測定（最終シーズンを予測して決める）、投手の疲れ（打順の巡目ごとの係数）、打順3人先までの前向き計算 |
-| `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）と、選んだ作戦と代替案の比較 |
+| `src/saikaku/tactics.py` | 作戦ごとの結果の分布（`tactics.json`）、盗塁成功率の補正（リーグ・走者、走者の寄せは翌年予測で測定）、選んだ作戦と代替案の比較 |
 | `src/saikaku/game.py` | **主な入口。** 試合ノート（Obsidianの表）を読み、判断ごとに採点してチーム合計のレポート `〜_採点.md` を書く |
 | `src/saikaku/card.py` | X投稿用の画像（原則1枚）と定型本文。書式の決まりは `POST_FORMAT.md`。game から自動で呼ばれる |
 | `試合/` | ユーザーの試合ノート置き場。テンプレート以外は git 対象外 |

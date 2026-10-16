@@ -15,7 +15,8 @@ state and differ only in who bats or pitches.
 from __future__ import annotations
 
 import json
-from collections import Counter
+import math
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
@@ -46,6 +47,7 @@ TACTIC_NAMES = {
 
 #: Tactics whose starting outcomes come from data.
 ESTIMATED = ("bunt", "steal2", "steal3")
+STEALS = ("steal2", "steal3")
 
 
 def _always(outs: int, bases: int) -> bool:
@@ -89,6 +91,8 @@ class Matchup:
     #: Batters the pitcher on the mound has faced this game before this
     #: moment. None leaves fatigue out; a reliever always starts fresh.
     pitcher_faced: int | None = None
+    #: Odds multiplier for a steal succeeding (see TacticTable.steal_odds).
+    steal_odds: float = 1.0
 
     def pair_lookup(self, events: EventTable) -> PairLookup | None:
         if not self.head_to_head:
@@ -119,10 +123,14 @@ class TacticTable:
 
     counts: dict[str, dict[tuple[int, int], Counter[tuple[int, int, int]]]]
     source: str = ""
+    #: Pseudo attempts at the league rate that regress a runner's steal record,
+    #: measured by predicting the final season from the earlier ones.
+    runner_pseudo: float = 20.0
 
     @classmethod
     def from_plays(cls, plays: Iterable[Play], source: str = "") -> "TacticTable":
         counts: dict[str, dict[tuple[int, int], Counter]] = {name: {} for name in ESTIMATED}
+        runners: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
         for play in plays:
             tactic = classify(play)
             if tactic not in counts:
@@ -132,14 +140,53 @@ class TacticTable:
             counts[tactic].setdefault((t.outs_pre, t.bases_pre), Counter())[
                 (t.outs_post, bases_post, t.runs)
             ] += 1
-        return cls(counts, source)
+            if tactic in STEALS and play.runner:
+                record = runners[(play.season, play.runner)]
+                record[0 if t.outs_post == t.outs_pre else 1] += 1
+        return cls(counts, source, measure_runner_pseudo(runners))
 
     def samples(self, tactic: str, outs: int, bases: int) -> int:
         if tactic not in self.counts:
             return 0
         return sum(self.counts[tactic].get((outs, bases), Counter()).values())
 
-    def outcomes(self, tactic: str, outs: int, bases: int) -> list[Outcome]:
+    def steal_success(self) -> float:
+        """The share of steal attempts in the data that ended without an out."""
+
+        safe = caught = 0
+        for tactic in STEALS:
+            for (outs, _), counter in self.counts.get(tactic, {}).items():
+                for (o, _, _), n in counter.items():
+                    if o == outs:
+                        safe += n
+                    else:
+                        caught += n
+        return safe / (safe + caught) if safe + caught else 0.0
+
+    def steal_odds(
+        self, league: tuple[int, int] | None = None, runner: tuple[int, int] | None = None
+    ) -> float:
+        """Multiplier on the odds of a steal succeeding, relative to the data.
+
+        ``league`` and ``runner`` are (stolen bases, caught stealing). The
+        runner's record is regressed to the league rate with
+        :attr:`runner_pseudo` attempts; with neither, nothing changes.
+        """
+
+        base = self.steal_success()
+        if not 0 < base < 1:
+            return 1.0
+        rate = base
+        if league and sum(league) > 0:
+            rate = league[0] / sum(league)
+        if runner and sum(runner) > 0:
+            rate = (runner[0] + self.runner_pseudo * rate) / (sum(runner) + self.runner_pseudo)
+        rate = min(max(rate, 0.01), 0.99)
+        return (rate / (1 - rate)) / (base / (1 - base))
+
+    def outcomes(
+        self, tactic: str, outs: int, bases: int, steal_odds: float = 1.0
+    ) -> list[Outcome]:
         if tactic == "stay":
             return [(outs, bases, 0, 1.0)]
         if tactic == "ibb":
@@ -150,8 +197,13 @@ class TacticTable:
             raise InsufficientData(
                 f"{TACTIC_NAMES[tactic]} from {state_key(outs, bases)}: {total} samples"
             )
+        weights = {
+            end: n * (steal_odds if tactic in STEALS and end[0] == outs else 1.0)
+            for end, n in counter.items()
+        }
+        weight = sum(weights.values())
         return sorted(
-            ((o, b, r, n / total) for (o, b, r), n in counter.items()),
+            ((o, b, r, w / weight) for (o, b, r), w in weights.items()),
             key=lambda outcome: -outcome[3],
         )
 
@@ -159,6 +211,7 @@ class TacticTable:
         return json.dumps(
             {
                 "source": self.source,
+                "runner_pseudo": self.runner_pseudo,
                 "tactics": {
                     tactic: {
                         state_key(*state): [[o, b, r, n] for (o, b, r), n in sorted(c.items())]
@@ -181,7 +234,7 @@ class TacticTable:
                 outs, mask = key.split("-")
                 state = (int(outs), base_index(tuple(char == "1" for char in mask)))
                 counts[tactic][state] = Counter({(o, b, r): n for o, b, r, n in rows})
-        return cls(counts, raw.get("source", ""))
+        return cls(counts, raw.get("source", ""), raw.get("runner_pseudo", 20.0))
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_TACTICS) -> "TacticTable":
@@ -291,7 +344,7 @@ def evaluate(
         chosen_lineup = current
     chosen_pitcher = matchup.reliever if kind.chosen == "relief" else matchup.pitcher
     if kind.chosen in ESTIMATED or kind.chosen == "ibb":
-        chosen_start = table.outcomes(kind.chosen, state.outs, bases)
+        chosen_start = table.outcomes(kind.chosen, state.outs, bases, matchup.steal_odds)
     else:
         chosen_start = stay
 
@@ -321,3 +374,39 @@ def evaluate(
         chosen_samples=table.samples(kind.chosen, state.outs, bases),
         alternative_samples=events.samples(state.outs, bases),
     )
+
+
+def measure_runner_pseudo(runners: dict[tuple[str, str], list[int]]) -> float:
+    """Pseudo attempts that make earlier seasons best predict the last one.
+
+    ``runners`` maps (season, runner) to [safe, caught]. Each runner's earlier
+    record, regressed toward the earlier league rate with k attempts, predicts
+    his steals in the held-out season; the k with the lowest log loss wins.
+    """
+
+    seasons = sorted({season for season, _ in runners})
+    if len(seasons) < 2:
+        return 20.0
+    test_season = seasons[-1]
+    earlier: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    later: dict[str, list[int]] = {}
+    for (season, runner), (safe, caught) in runners.items():
+        if season == test_season:
+            later[runner] = [safe, caught]
+        else:
+            earlier[runner][0] += safe
+            earlier[runner][1] += caught
+    safe_all = sum(s for s, _ in earlier.values())
+    league = safe_all / max(sum(s + c for s, c in earlier.values()), 1)
+    cases = [(earlier[r], later[r]) for r in later if r in earlier]
+
+    def loss(k: float) -> float:
+        total = 0.0
+        for (s0, c0), (s1, c1) in cases:
+            q = (s0 + k * league) / (s0 + c0 + k)
+            q = min(max(q, 1e-9), 1 - 1e-9)
+            total -= s1 * math.log(q) + c1 * math.log(1 - q)
+        return total
+
+    candidates = [2 ** (i / 4) for i in range(0, 41)]  # 1 .. 1024
+    return min(candidates, key=loss)

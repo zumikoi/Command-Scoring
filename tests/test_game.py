@@ -177,3 +177,15 @@ def test_intentional_walks_column_is_taken_out_of_walks(table):
     plain = parse_game(GAME, table)
 
     assert game.players[("丙", False)].ability.ratio("BB") < plain.players[("丙", False)].ability.ratio("BB")
+
+
+def test_steal_columns_are_read(table):
+    header = "| # | 回 | 表裏 | アウト | 走者 | 得点 | 采配 | 打者 | 次の打者 | その次 | 投手 | 代わり | メモ |"
+    text = GAME.replace(header, header + " 走者名 |")
+    text = text.replace("| 丁 |  | 成功 |", "| 丁 |  | 成功 | 甲 |")
+    text += "\n## リーグ平均\n\n| 盗塁 | 盗塁刺 |\n| --- | --- |\n| 70 | 30 |\n"
+
+    game = parse_game(text, table)
+
+    assert game.league_steals == (70, 30)
+    assert game.decisions[0].runner == "甲"

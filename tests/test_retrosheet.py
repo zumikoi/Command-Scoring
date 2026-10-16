@@ -71,3 +71,15 @@ def test_reads_tactic_flags(tmp_path):
 
     assert [p.bunt_attempt for p in plays] == [True, True, False, False, False]
     assert [p.steal_target for p in plays] == [None, None, 2, None, None]
+
+
+def test_steal_attempts_record_the_runner(tmp_path):
+    header = HEADER + ",pa,sb2,cs2,sb3,cs3"
+    rows = [
+        "G,1,0,0,0,fast001,,,,fast001,,0,0,1,0,0,0",
+        "G,1,0,1,1,,slow001,,,,slow001,0,0,0,0,1,0",
+        "G,1,0,0,0,x,,,x,,,0,1,0,0,0,0",
+    ]
+    plays = list(read_plays(write_csv(tmp_path / "p.csv", rows=rows, header=header)))
+
+    assert [p.runner for p in plays] == ["fast001", "slow001", ""]
