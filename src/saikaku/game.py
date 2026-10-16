@@ -30,11 +30,24 @@ from .abilities import (
     Ability,
     StatLine,
     batter_ability,
+    head_to_head_factors,
     league_rates,
+    matchup,
     pitcher_ability,
 )
 from .decisions import EVEN_MARGIN
 from .events import EventTable
+from .gamelog import (
+    LogEntry,
+    LogFormatError,
+    batters_faced,
+    batting_line,
+    find_decision,
+    parse_log,
+    pitching_line,
+    steals,
+    subtract,
+)
 from .model import GameState, WinProbabilityModel
 from .retrosheet import ATTRIBUTION
 from .tactics import (
@@ -95,6 +108,8 @@ class DecisionRow:
     #: and how many batters the pitcher being hit for had faced.
     next_pitcher: str = ""
     removed_faced: int | None = None
+    #: Where in 試合経過 the decision was made (the plate appearance it preceded).
+    log_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +122,10 @@ class Game:
     warnings: tuple[str, ...] = ()
     #: League (stolen bases, caught stealing), if given.
     league_steals: tuple[int, int] | None = None
+    #: The 試合経過 rows, in order, if the note has them.
+    log: tuple[LogEntry, ...] = ()
+    #: League outcome rates the players' lines were compared with.
+    league: Mapping[str, float] | None = None
 
     @property
     def away(self) -> str:
@@ -263,6 +282,13 @@ def parse_game(text: str, events: EventTable) -> Game:
             league = league_rates(line)
         league_steals = _steals(league_rows[0], "リーグ平均")
 
+    try:
+        log = parse_log(_table(sections.get("試合経過", [])))
+    except LogFormatError as error:
+        raise GameFormatError(str(error)) from None
+    # Season totals read after the game include it; take it back out.
+    after_game = bool(log) and properties.get("成績の時点", "").strip() == "試合後"
+
     players: dict[tuple[str, bool], Player] = {}
     for row in _table(sections.get("選手", [])):
         name = row.get("名前", "")
@@ -272,6 +298,12 @@ def parse_game(text: str, events: EventTable) -> Game:
         batting = not kind.startswith("投")
         profile = row.get("型", "")
         line = _stat_line(row, name)
+        if line is not None and after_game:
+            today = batting_line(log, name) if batting else pitching_line(log, name)
+            try:
+                line = subtract(line, today, name)
+            except LogFormatError as error:
+                raise GameFormatError(str(error)) from None
         if line is not None:
             ability = (batter_ability if batting else pitcher_ability)(line, league, name)
         elif profile:
@@ -286,8 +318,12 @@ def parse_game(text: str, events: EventTable) -> Game:
             if hand not in HANDS or (not batting and hand == "両"):
                 raise GameFormatError(f"{name}: 左右は 右・左{'・両' if batting else ''} で書いてください")
             ability = replace(ability, hand=HANDS[hand])
+        season_steals = _steals(row, name) if batting else None
+        if season_steals and after_game:
+            sb, cs = steals(log, name)
+            season_steals = (max(season_steals[0] - sb, 0), max(season_steals[1] - cs, 0))
         players[(name, batting)] = Player(
-            name, batting, replace(ability, label=name), _steals(row, name) if batting else None
+            name, batting, replace(ability, label=name), season_steals
         )
 
     head_to_head: dict[tuple[str, str], StatLine] = {}
@@ -298,6 +334,7 @@ def parse_game(text: str, events: EventTable) -> Game:
             head_to_head[(batter, pitcher)] = line
 
     decisions = []
+    log_cursor = 0
     for index, row in enumerate(_table(sections.get("采配", [])), start=1):
         number = _int(row.get("#", ""), "#") or index
         call = row.get("采配", "")
@@ -323,6 +360,23 @@ def parse_game(text: str, events: EventTable) -> Game:
         except ValueError as error:
             raise GameFormatError(f"#{number}: {error}") from None
         names = [row.get("次の打者", ""), row.get("その次", "")]
+        pitcher_faced = _int(row.get("投手の打者数", ""), f"#{number} 投手の打者数")
+        removed_faced = _int(row.get("降板投手の打者数", ""), f"#{number} 降板投手の打者数")
+        log_index = None
+        if log:
+            # A pinch hitter's plate appearance is logged under his own name.
+            at_bat = row.get("代わり", "") if call == "代打" else row.get("打者", "")
+            log_index = find_decision(log, log_cursor, state.inning, half, at_bat)
+            if log_index is None:
+                warnings.append(f"#{number}: 試合経過に{state.inning}回{row.get('表裏', '')}の"
+                                f"「{at_bat}」の打席が見つからないので、当日の成績を使っていません")
+            else:
+                log_cursor = log_index
+                before = log[:log_index]
+                if pitcher_faced is None:
+                    pitcher_faced = batters_faced(before, row.get("投手", ""))
+                if removed_faced is None and call in ("代打", "代打なし"):
+                    removed_faced = batters_faced(before, row.get("打者", ""))
         decisions.append(
             DecisionRow(
                 number=number,
@@ -333,10 +387,11 @@ def parse_game(text: str, events: EventTable) -> Game:
                 pitcher=row.get("投手", ""),
                 substitute=row.get("代わり", ""),
                 note=row.get("メモ", ""),
-                pitcher_faced=_int(row.get("投手の打者数", ""), f"#{number} 投手の打者数"),
+                pitcher_faced=pitcher_faced,
                 runner=row.get("走者名", ""),
                 next_pitcher=row.get("次の投手", ""),
-                removed_faced=_int(row.get("降板投手の打者数", ""), f"#{number} 降板投手の打者数"),
+                removed_faced=removed_faced,
+                log_index=log_index,
             )
         )
         substitute_bats = call in ("代打", "代打なし")
@@ -349,7 +404,7 @@ def parse_game(text: str, events: EventTable) -> Game:
 
     return Game(
         properties, players, head_to_head, tuple(decisions),
-        tuple(dict.fromkeys(warnings)), league_steals,
+        tuple(dict.fromkeys(warnings)), league_steals, log, league,
     )
 
 
@@ -389,7 +444,9 @@ def score_game(
         def ability(name: str, batting: bool) -> Ability:
             key = (name, batting)
             if key not in cache:
-                cache[key] = _resolve(name, batting, game, events)
+                cache[key] = _with_form(
+                    _resolve(name, batting, game, events), name, batting, game, row, events
+                )
             return cache[key]
 
         batter = ability(row.batter, True)
@@ -455,6 +512,29 @@ def _points(value: float) -> float:
     """Round to the 0.1pt shown everywhere, so verdicts and totals match the table."""
 
     return round(value, 1) + 0.0  # + 0.0 turns -0.0 into 0.0
+
+
+def _with_form(
+    ability: Ability, name: str, batting: bool, game: Game, row: DecisionRow, events: EventTable
+) -> Ability:
+    """Move an ability toward how the player has done earlier in this game.
+
+    The pull is the measured one (``EventTable.form_pseudo``), which is small:
+    earlier results today predict the next plate appearance only slightly
+    beyond the season line.
+    """
+
+    if not name or row.log_index is None:
+        return ability
+    before = game.log[: row.log_index]
+    today = batting_line(before, name) if batting else pitching_line(before, name)
+    pseudo = events.form_pseudo.get("batter" if batting else "pitcher")
+    if today.unintentional_pa <= 0 or not pseudo:
+        return ability
+    league = game.league or events.league
+    expected = matchup(league, ability, AVERAGE) if batting else matchup(league, AVERAGE, ability)
+    factors = head_to_head_factors(today, expected, pseudo)
+    return replace(ability, ratios={e: ability.ratio(e) * factors[e] for e in factors})
 
 
 def _explain(error: Exception) -> str:
@@ -568,6 +648,7 @@ def render_report(
         "- 勝率は両チームを平均的な戦力とし、打席の打者から3人目まではこの試合で指定した打者・投手・左右・対戦成績で計算しています",
         "- 盗塁は、リーグ平均に盗塁・盗塁刺を書いた試合ではそのリーグの成功率に、「走者名」と選手の盗塁成績を書いた場面ではその走者の成功率（リーグ平均に寄せて見積もる）に合わせています",
         "- 投手に代打を出す場面で「次の投手」を書くと、次の回を続投した場合と代わった投手の場合の差も代打の損得に含めます（相手打者は平均として計算）",
+        "- 試合経過を書いた試合では、判断より前のその日の打席結果（当日の調子）も反映します。ただし過去のデータでは当日の調子は次の打席をほとんど当てないため、効きはごく小さくなります",
         "- 「投手の打者数」を書いた場面では、投手が打順の何巡目に当たっているか（疲れ・慣れ）も反映しています。継投で出てくる投手は投げ始めとして扱います",
         "- 得点の起こりやすさはMLB 2022〜2024年（Retrosheet）から推定しており、NPBの得点環境との差は補正していません",
         f"- 「互角」は差が±{EVEN_MARGIN}pt未満のもの（表示上の区切りで、統計的な基準ではありません）",

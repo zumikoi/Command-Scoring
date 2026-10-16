@@ -69,6 +69,13 @@ def main() -> None:
                   f" / 対数損失の改善 {summary['log_loss_gain'][group]:.1f}")
     else:
         print(f"  対戦成績: {summary.get('note', '')}")
+    for role, label in (("batter", "打者"), ("pitcher", "投手")):
+        pseudo = events.form_pseudo.get(role, {})
+        gains = events.form_summary.get("log_loss_gain", {}).get(role, {})
+        for group, events_in_group in H2H_GROUPS.items():
+            k = pseudo.get(events_in_group[0], 0)
+            print(f"  当日の調子（{label}）{group}: 寄せ {k:,.0f}打席 / 2打席分の重み "
+                  f"{2 / (2 + k):.1%} / 対数損失の改善 {gains.get(group, 0):.1f}")
 
 
 if __name__ == "__main__":

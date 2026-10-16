@@ -92,6 +92,10 @@ class EventTable:
     #: Per-outcome multipliers by trip through the order ("1".."4"), relative
     #: to what the pitcher's own season line predicts.
     fatigue: dict[str, dict[str, float]] = field(default_factory=dict)
+    #: Pseudo plate appearances that regress a player's results earlier in the
+    #: same game ("today's form"), for "batter" and "pitcher".
+    form_pseudo: dict[str, dict[str, float]] = field(default_factory=dict)
+    form_summary: dict = field(default_factory=dict)
     source: str = ""
     _cache: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -104,7 +108,7 @@ class EventTable:
         sides: dict[str, Counter[str]] = defaultdict(Counter)
         pairs: dict[tuple[str, str, str, str], Counter[str]] = defaultdict(Counter)
         faced: Counter[tuple[str, str]] = Counter()
-        by_trip: list[tuple[str, str, str, int, str | None]] = []
+        by_trip: list[tuple[str, str, str, int, str | None, str, str]] = []
         for play in plays:
             if play.plate_appearance:
                 key = (play.game, play.pitcher)
@@ -112,7 +116,9 @@ class EventTable:
                 faced[key] += 1
                 if play.event is not None:
                     side = platoon_side(play.bat_hand, play.pit_hand)
-                    by_trip.append((play.season, play.batter, play.pitcher, trip, side, play.event))
+                    by_trip.append(
+                        (play.season, play.batter, play.pitcher, trip, side, play.event, play.game)
+                    )
             if play.event is None:
                 continue
             t = play.transition
@@ -139,6 +145,7 @@ class EventTable:
         }
         h2h_pseudo, h2h_summary = measure_head_to_head(pairs)
         fatigue = measure_fatigue(by_trip, batters, pitchers, league, platoon)
+        form_pseudo, form_summary = measure_form(by_trip, batters, pitchers, league, platoon, fatigue)
         return cls(
             rates={s: Counter(c) for s, c in rates.items()},
             transitions={e: {s: Counter(c) for s, c in by.items()} for e, by in transitions.items()},
@@ -149,6 +156,8 @@ class EventTable:
             h2h_pseudo=h2h_pseudo,
             h2h_summary=h2h_summary,
             fatigue=fatigue,
+            form_pseudo=form_pseudo,
+            form_summary=form_summary,
             source=source,
         )
 
@@ -272,6 +281,8 @@ class EventTable:
                 "h2h_pseudo": self.h2h_pseudo,
                 "h2h_summary": self.h2h_summary,
                 "fatigue": self.fatigue,
+                "form_pseudo": self.form_pseudo,
+                "form_summary": self.form_summary,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -293,6 +304,8 @@ class EventTable:
             h2h_pseudo=raw.get("h2h_pseudo", {}),
             h2h_summary=raw.get("h2h_summary", {}),
             fatigue=raw.get("fatigue", {}),
+            form_pseudo=raw.get("form_pseudo", {}),
+            form_summary=raw.get("form_summary", {}),
             source=raw.get("source", ""),
         )
 
@@ -493,7 +506,7 @@ def measure_fatigue(
     pitcher_cache: dict[tuple[str, str], Ability] = {}
     observed: dict[int, Counter[str]] = defaultdict(Counter)
     expected: dict[int, Counter[str]] = defaultdict(Counter)
-    for season, batter, pitcher, trip, side, event in plays:
+    for season, batter, pitcher, trip, side, event, *_ in plays:
         b_key, p_key = (season, batter), (season, pitcher)
         try:
             if b_key not in batter_cache:
@@ -513,3 +526,74 @@ def measure_fatigue(
         str(trip): {e: observed[trip][e] / expected[trip][e] for e in EVENTS if expected[trip][e]}
         for trip in sorted(observed)
     }
+
+
+#: Candidate pseudo plate appearances for today's form; the last means none.
+_FORM_GRID = (5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, NO_SIGNAL_PSEUDO)
+
+
+def measure_form(
+    plays: list[tuple[str, str, str, int, str | None, str, str]],
+    batters: Mapping[tuple[str, str], Counter[str]],
+    pitchers: Mapping[tuple[str, str], Counter[str]],
+    league: Mapping[str, float],
+    platoon: Mapping[str, Mapping[str, float]],
+    fatigue: Mapping[str, Mapping[str, float]],
+) -> tuple[dict[str, dict[str, float]], dict]:
+    """How far a player's earlier plate appearances today should move the next one.
+
+    Every plate appearance is predicted from the two players' season lines,
+    their hands and the pitcher's trip through the order. The batter's (and
+    separately the pitcher's) earlier results in the same game are then mixed
+    in with k pseudo plate appearances at that prediction, and the k with the
+    lowest log loss over the season is kept. A k at the top of the grid means
+    earlier results today say nothing the season line did not.
+    """
+
+    batter_cache: dict[tuple[str, str], Ability] = {}
+    pitcher_cache: dict[tuple[str, str], Ability] = {}
+    loss = {role: {g: [0.0] * len(_FORM_GRID) for g in H2H_GROUPS} for role in ("batter", "pitcher")}
+    seen = {"batter": defaultdict(lambda: [0, Counter()]), "pitcher": defaultdict(lambda: [0, Counter()])}
+    group_of = {e: g for g, events in H2H_GROUPS.items() for e in events}
+    counted = 0
+    for season, batter, pitcher, trip, side, event, game in plays:
+        b_key, p_key = (season, batter), (season, pitcher)
+        try:
+            if b_key not in batter_cache:
+                batter_cache[b_key] = batter_ability(_line(batters[b_key], True), league)
+            if p_key not in pitcher_cache:
+                pitcher_cache[p_key] = pitcher_ability(_line(pitchers[p_key], False), league)
+        except ValueError:
+            continue
+        extra = {e: (platoon.get(side, {}) if side else {}).get(e, 1.0)
+                 * fatigue.get(str(trip), {}).get(e, 1.0) for e in EVENTS}
+        rates = matchup(league, batter_cache[b_key], pitcher_cache[p_key], head_to_head=extra)
+        outcome = group_of.get(event)
+        counted += 1
+        for role, key in (("batter", (game, batter)), ("pitcher", (game, pitcher))):
+            m, before = seen[role][key]
+            if m:
+                for group in H2H_GROUPS:
+                    mu = sum(rates[e] for e in H2H_GROUPS[group])
+                    x = before[group]
+                    hit = outcome == group
+                    row = loss[role][group]
+                    for i, k in enumerate(_FORM_GRID):
+                        q = (x + k * mu) / (m + k)
+                        q = min(max(q, 1e-9), 1 - 1e-9)
+                        row[i] -= math.log(q) if hit else math.log(1 - q)
+            seen[role][key][0] += 1
+            if outcome:
+                seen[role][key][1][outcome] += 1
+
+    pseudo: dict[str, dict[str, float]] = {}
+    gains: dict[str, dict[str, float]] = {}
+    for role in loss:
+        pseudo[role], gains[role] = {}, {}
+        for group, row in loss[role].items():
+            best = min(range(len(_FORM_GRID)), key=row.__getitem__)
+            for e in H2H_GROUPS[group]:
+                pseudo[role][e] = float(_FORM_GRID[best])
+            gains[role][group] = row[-1] - row[best]
+        pseudo[role]["OUT"] = float(NO_SIGNAL_PSEUDO)
+    return pseudo, {"plate_appearances": counted, "log_loss_gain": gains}
