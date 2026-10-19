@@ -98,14 +98,20 @@ def render_chart(
     points: Sequence[Point],
     team: str,
     title: str,
-    markers: Sequence[tuple[int, str, str, bool]] = (),
+    markers: Sequence[tuple[int, str, str, str]] = (),
+    opponent: str = "",
 ):
     """A line chart of the followed team's chances, with decision markers.
 
-    ``markers`` are (x, label, tone, by_followed_team) for decisions, placed
+    ``markers`` are (x, label, tone, deciding_team) for decisions, placed
     before the play they preceded; tone is "pos", "neg" or "even" from the
-    deciding team's side. The other team's decisions are drawn hollow.
+    deciding team's side, drawn in that team's colours (see
+    :mod:`saikaku.teamcolors`). The opponent's decisions are drawn hollow.
+    The area above 50% is tinted in the followed team's colour, below it in
+    the opponent's.
     """
+
+    from .teamcolors import palette
 
     from .card import COLORS, Fonts, _pillow  # Pillow is optional
 
@@ -146,21 +152,21 @@ def render_chart(
         for wp_a, wp_b, x_a, x_b in ((a.wp, b.wp, px(a.x), px(b.x)),):
             above = (wp_a + wp_b) / 2 >= 0.5
             draw.polygon([(x_a, half_line), (x_a, py(wp_a)), (x_b, py(wp_b)), (x_b, half_line)],
-                         fill=COLORS["pos_soft" if above else "neg_soft"])
+                         fill=palette(team if above else opponent)["pos_soft"])
     draw.line([(px(p.x), py(p.wp)) for p in points], fill=COLORS["ink"], width=3, joint="curve")
 
     placed: list[tuple[float, float, float, float]] = []
     label_font = fonts.get(16, True)
     circles = []
-    for x, label, tone, ours in markers:
+    for x, label, tone, deciding in markers:
         wp = points[min(max(x, 0), len(points) - 1)].wp
         cx, cy = px(x), py(wp)
-        color = COLORS.get(tone, COLORS["even"])
-        fill = color if ours else COLORS["surface"]
+        color = palette(deciding)[tone]
+        fill = color if deciding == team else COLORS["surface"]
         draw.ellipse((cx - 9, cy - 9, cx + 9, cy + 9), fill=fill, outline=color, width=3)
         circles.append((cx - 10, cy - 10, cx + 10, cy + 10))
     # Put each label in the first free slot: above, below, then further out.
-    for (x, label, tone, ours), circle in zip(markers, circles):
+    for (x, label, tone, deciding), circle in zip(markers, circles):
         cx, cy = (circle[0] + circle[2]) / 2, (circle[1] + circle[3]) / 2
         w = label_font.getlength(label)
         box = None
@@ -173,7 +179,7 @@ def render_chart(
         box = box or (cx - w / 2 - 2, cy - 26, cx + w / 2 + 2, cy - 8)
         placed.append(box)
         draw.text(((box[0] + box[2]) / 2, box[1]), label, font=label_font,
-                  fill=COLORS.get(tone, COLORS["even"]), anchor="ma")
+                  fill=palette(deciding)[tone], anchor="ma")
 
     final = points[-1].wp
     fy = py(final)
@@ -184,13 +190,20 @@ def render_chart(
 
     legend_y = height - bottom + 44
     x0 = left
-    for fill_color, outline, text in (
-        (COLORS["pos"], COLORS["pos"], f"{team}の采配（緑 好判断・灰 互角・赤 疑問）"),
-        (COLORS["surface"], COLORS["even"], "相手の采配"),
-    ):
-        draw.ellipse((x0, legend_y - 7, x0 + 14, legend_y + 7), fill=fill_color, outline=outline, width=3)
-        draw.text((x0 + 22, legend_y), text, font=fonts.get(17), fill=COLORS["muted"], anchor="lm")
-        x0 += 34 + fonts.get(17).getlength(text) + 24
+    legend_font = fonts.get(17)
+    for name, hollow in ((team, False), (opponent, True)):
+        if not name:
+            continue
+        colors = palette(name)
+        draw.text((x0, legend_y), f"{name}の采配", font=fonts.get(17, True), fill=colors["pos"], anchor="lm")
+        x0 += fonts.get(17, True).getlength(f"{name}の采配") + 12
+        for kind, word in (("pos", "好判断"), ("neg", "疑問")):
+            fill = COLORS["surface"] if hollow else colors[kind]
+            draw.ellipse((x0, legend_y - 7, x0 + 14, legend_y + 7), fill=fill, outline=colors[kind], width=3)
+            draw.text((x0 + 20, legend_y), word, font=legend_font, fill=COLORS["muted"], anchor="lm")
+            x0 += 20 + legend_font.getlength(word) + 14
+        x0 += 22
+    draw.text((x0, legend_y), "灰は互角", font=legend_font, fill=COLORS["muted"], anchor="lm")
     note = "両チームを平均的な戦力とした勝率。得点の起こりやすさはMLB（Retrosheet 2022〜24）から推定。"
     draw.text((left, height - 46), note, font=fonts.get(16), fill=COLORS["muted"])
     attribution = ("The information used here was obtained free of charge from and is copyrighted by "

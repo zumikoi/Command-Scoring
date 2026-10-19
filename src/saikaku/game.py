@@ -677,7 +677,7 @@ def win_probability_section(
                f"（{team}の勝率 {biggest.wp - biggest.delta:.0%}→{biggest.wp:.0%}）")
     tones = {"好判断": "pos", "疑問": "neg"}
     markers = [
-        (r.row.log_index, f"#{r.row.number}", tones.get(r.verdict, "even"), r.team == team)
+        (r.row.log_index, f"#{r.row.number}", tones.get(r.verdict, "even"), r.team)
         for r in rows
         if r.row.log_index is not None
     ]
@@ -686,7 +686,8 @@ def win_probability_section(
         from .card import long_date
 
         title = f"{long_date(game.properties.get('日付', ''))} {game.away} vs {game.home}".strip()
-        winprob.render_chart(points, team, title, markers).save(chart, optimize=True)
+        opponent = game.home if team == game.away else game.away
+        winprob.render_chart(points, team, title, markers, opponent).save(chart, optimize=True)
     except SystemExit as error:  # Pillow or a font is missing
         print(f"勝率のグラフは作れませんでした: {error}")
         chart = None

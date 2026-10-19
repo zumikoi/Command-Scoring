@@ -29,6 +29,7 @@ from .game import (
 )
 from .model import GameState, WinProbabilityModel
 from .tactics import TacticTable
+from .teamcolors import palette
 
 WIDTH = 1200
 MARGIN = 56
@@ -315,20 +316,21 @@ def _draw_teams(c: Canvas, game: Game, rows: list[ScoredRow], y: int) -> int:
         x = MARGIN + i * (card_w + gap)
         leading = t.total == best and len([s for s in totals if s.total == best]) == 1
         c.box((x, y, x + card_w, y + TEAM_CARD_H), "surface", outline="ink" if leading else "line")
-        c.text((x + 28, y + 20), c.fit(t.team, 30, card_w - 56, True), 30, bold=True)
-        score_tone = tone(t.total) if t.scored else "even"
+        colors = palette(t.team)
+        c.text((x + 28, y + 20), c.fit(t.team, 30, card_w - 56, True), 30, colors["pos"], bold=True)
+        score_color = colors[tone(t.total) if t.scored else "even"]
         score = f"{t.total:+.1f}"
-        c.text((x + 28, y + 54), score, 60, score_tone, bold=True)
-        c.text((x + 28 + c.width_of(score, 60, True) + 6, y + 82), "pt", 26, score_tone, bold=True)
+        c.text((x + 28, y + 54), score, 60, score_color, bold=True)
+        c.text((x + 28 + c.width_of(score, 60, True) + 6, y + 82), "pt", 26, score_color, bold=True)
         counts = f"判断{len(t.scored)}　好判断{t.count('好判断')}・互角{t.count('互角')}・疑問{t.count('疑問')}"
         c.text((x + card_w - 28, y + 20), counts, 21, "muted", anchor="ra")
     return y + TEAM_CARD_H
 
 
-def _pill(c: Canvas, x_right: int, y: int, label: str, kind: str) -> None:
+def _pill(c: Canvas, x_right: int, y: int, label: str, color: str, background: str) -> None:
     w = c.width_of(label, 22, True) + 28
-    c.box((x_right - w, y, x_right, y + 38), f"{kind}_soft", radius=19)
-    c.text((x_right - w / 2, y + 19), label, 22, kind, bold=True, anchor="mm")
+    c.box((x_right - w, y, x_right, y + 38), background, radius=19)
+    c.text((x_right - w / 2, y + 19), label, 22, color, bold=True, anchor="mm")
 
 
 def _draw_keys(c: Canvas, keys: list[ScoredRow], y: int, key_h: int) -> int:
@@ -345,7 +347,8 @@ def _draw_keys(c: Canvas, keys: list[ScoredRow], y: int, key_h: int) -> int:
         kind = tone(r.value)
         inner = key_h - 16
         c.box((MARGIN, y, WIDTH - MARGIN, y + inner), "surface", outline="line")
-        c.draw.rectangle((MARGIN, y + 14, MARGIN + 8, y + inner - 14), fill=COLORS[kind])
+        colors = palette(r.team)
+        c.draw.rectangle((MARGIN, y + 14, MARGIN + 8, y + inner - 14), fill=colors[kind])
         left = MARGIN + 32
         value_text = f"{r.value:+.1f}pt"
         value_w = c.width_of(value_text, 46, True)
@@ -358,8 +361,8 @@ def _draw_keys(c: Canvas, keys: list[ScoredRow], y: int, key_h: int) -> int:
         compare = (f"{r.chosen_label} {r.chosen_probability:.1%}　／　"
                    f"{r.alternative_label}なら {r.alternative_probability:.1%}")
         c.text((left, y + top + step + gap), c.fit(compare, 23, text_w), 23, "muted")
-        c.text((WIDTH - MARGIN - 32, y + top + 4), value_text, 46, kind, bold=True, anchor="ra")
-        _pill(c, WIDTH - MARGIN - 32, y + inner - 52, r.verdict, kind)
+        c.text((WIDTH - MARGIN - 32, y + top + 4), value_text, 46, colors[kind], bold=True, anchor="ra")
+        _pill(c, WIDTH - MARGIN - 32, y + inner - 52, r.verdict, colors[kind], colors[f"{kind}_soft"])
         y += key_h
     return y - 16
 
@@ -380,8 +383,10 @@ def _draw_list(c: Canvas, rows: list[ScoredRow], y: int, title: str, row_h: int)
         if i:
             c.draw.line((MARGIN + 16, y, WIDTH - MARGIN - 16, y), fill=COLORS["line"], width=1)
         c.text((col_scene + 12, mid), scene(r.row.state, short=True), 22, "muted", anchor="lm")
-        c.text((col_call, mid), c.fit(f"{r.team} {describe(r)}", 22, bar_left - col_call - 16),
-               22, anchor="lm")
+        team_w = c.width_of(r.team + " ", 22, True)
+        c.text((col_call, mid), r.team, 22, palette(r.team)["pos"], bold=True, anchor="lm")
+        c.text((col_call + team_w, mid),
+               c.fit(describe(r), 22, bar_left - col_call - 16 - team_w), 22, anchor="lm")
         c.draw.line((zero, y + 8, zero, y + row_h - 8), fill=COLORS["line"], width=2)
         if r.value is None:
             c.text((zero, mid), "対象外", 20, "muted", anchor="mm")
@@ -389,8 +394,9 @@ def _draw_list(c: Canvas, rows: list[ScoredRow], y: int, title: str, row_h: int)
         kind = tone(r.value)
         length = max(abs(r.value) / scale * half, 3)
         x0, x1 = (zero, zero + length) if r.value >= 0 else (zero - length, zero)
-        c.draw.rounded_rectangle((x0, mid - 9, x1, mid + 9), radius=4, fill=COLORS[kind])
-        c.text((WIDTH - MARGIN - 20, mid), f"{r.value:+.1f}", 24, kind, bold=True, anchor="rm")
+        colors = palette(r.team)
+        c.draw.rounded_rectangle((x0, mid - 9, x1, mid + 9), radius=4, fill=colors[kind])
+        c.text((WIDTH - MARGIN - 20, mid), f"{r.value:+.1f}", 24, colors[kind], bold=True, anchor="rm")
         y += row_h
     return y + 8
 
