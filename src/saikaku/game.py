@@ -357,9 +357,16 @@ def parse_game(text: str, events: EventTable) -> Game:
         removed_faced = _int(row.get("降板投手の打者数", ""), f"#{number} 降板投手の打者数")
         log_index = None
         if log:
-            # A pinch hitter's plate appearance is logged under his own name.
+            # A pinch hitter's plate appearance is logged under his own name;
+            # a steal is found at the runner's own row when he is named.
+            steal = call in ("二盗", "三盗", "二盗せず", "三盗せず") and bool(row.get("走者名", ""))
             at_bat = row.get("代わり", "") if call == "代打" else row.get("打者", "")
-            log_index = find_decision(log, log_cursor, state.inning, half, at_bat)
+            if steal:
+                at_bat = row.get("走者名", "")
+            log_index = find_decision(log, log_cursor, state.inning, half, at_bat, steal)
+            if log_index is None and steal:
+                at_bat = row.get("打者", "")
+                log_index = find_decision(log, log_cursor, state.inning, half, at_bat)
             if log_index is None:
                 warnings.append(f"#{number}: 試合経過に{state.inning}回{row.get('表裏', '')}の"
                                 f"「{at_bat}」の打席が見つからないので、当日の成績を使っていません")
@@ -657,13 +664,17 @@ def render_report(
 
 def win_probability_section(
     path: Path, game: Game, rows: list[ScoredRow], model: WinProbabilityModel
-) -> tuple[list[str], Path | None]:
-    """The report's play-by-play win probability, and its chart when Pillow is there."""
+) -> tuple[list[str], Path | None, str]:
+    """The report's play-by-play win probability, its chart, and the biggest swing."""
 
     team, is_home = winprob.focus(game.away, game.home, game.properties.get("視点"))
     points = winprob.series(game.log, model, is_home)
     if points is None:
-        return [], None
+        return [], None, ""
+    biggest = max((p for p in points if p.entry), key=lambda p: abs(p.delta))
+    half = "表" if biggest.entry.half == "top" else "裏"
+    turning = (f"{biggest.entry.inning}回{half} {biggest.entry.batter}の{biggest.entry.result}"
+               f"（{team}の勝率 {biggest.wp - biggest.delta:.0%}→{biggest.wp:.0%}）")
     tones = {"好判断": "pos", "疑問": "neg"}
     markers = [
         (r.row.log_index, f"#{r.row.number}", tones.get(r.verdict, "even"), r.team == team)
@@ -672,12 +683,15 @@ def win_probability_section(
     ]
     chart = path.with_name(f"{path.stem}_勝率.png")
     try:
-        title = f"{game.properties.get('日付', '')} {game.away} vs {game.home}".strip()
+        from .card import long_date
+
+        title = f"{long_date(game.properties.get('日付', ''))} {game.away} vs {game.home}".strip()
         winprob.render_chart(points, team, title, markers).save(chart, optimize=True)
     except SystemExit as error:  # Pillow or a font is missing
         print(f"勝率のグラフは作れませんでした: {error}")
         chart = None
-    return winprob.report_section(points, team, is_home, chart.name if chart else None), chart
+    return (winprob.report_section(points, team, is_home, chart.name if chart else None),
+            chart, turning)
 
 
 def main() -> None:
@@ -691,7 +705,7 @@ def main() -> None:
         raise SystemExit(f"{path.name}: {error}") from None
     model = WinProbabilityModel.load_default()
     rows = score_game(game, model, TacticTable.load(), events)
-    extra, chart = win_probability_section(path, game, rows, model)
+    extra, chart, turning = win_probability_section(path, game, rows, model)
     images, post = [], ""
     try:
         from .card import write_post
@@ -699,7 +713,7 @@ def main() -> None:
         pass
     else:
         try:
-            images, post = write_post(path, game, rows)
+            images, post = write_post(path, game, rows, [chart] if chart else [], turning)
         except SystemExit as error:  # Pillow or a font is missing: report only
             print(f"投稿用の画像は作れませんでした: {error}")
     out = path.with_name(f"{path.stem}_採点.md")
@@ -713,7 +727,7 @@ def main() -> None:
         print(f"注意: {warning}")
     for image in images:
         print(f"-> {image}")
-    if chart:
+    if chart and chart not in images:
         print(f"-> {chart}")
     print(f"-> {out}")
 

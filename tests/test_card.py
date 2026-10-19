@@ -74,3 +74,21 @@ def test_cards_fit_one_image_and_split_only_when_needed(scored):
 
     assert len(one) == 1 and one[0].size[0] == 1200 and one[0].size[1] <= MAX_HEIGHT
     assert len(many) == 2
+
+
+def test_turning_play_is_added_when_it_fits(scored):
+    game, rows = scored
+
+    text = post_text(game, rows, "9回裏 甲の本塁打（ビジターの勝率 60%→0%）")
+
+    assert "山場：9回裏 甲の本塁打" in text
+    assert weighted_length(text) <= POST_LIMIT
+
+
+def test_turning_play_is_dropped_before_the_post_runs_long(scored):
+    game, rows = scored
+
+    text = post_text(game, rows, "長" * 200)
+
+    assert "山場" not in text
+    assert weighted_length(text) <= POST_LIMIT

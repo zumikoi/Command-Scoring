@@ -177,12 +177,23 @@ def subtract(season: StatLine, game: StatLine, what: str) -> StatLine:
 
 
 def find_decision(
-    entries: Sequence[LogEntry], start: int, inning: int, half: str, batter: str
+    entries: Sequence[LogEntry],
+    start: int,
+    inning: int,
+    half: str,
+    batter: str,
+    steal: bool = False,
 ) -> int | None:
-    """Index of the plate appearance a decision was made at, searching onward."""
+    """Index of the row a decision was made at, searching onward.
+
+    Normally that is the batter's plate appearance; for a steal it is the
+    runner's stolen base (or caught stealing) row, ``batter`` naming the runner.
+    """
 
     for index in range(start, len(entries)):
         e = entries[index]
-        if (e.inning, e.half, e.batter) == (inning, half, batter) and e.is_plate_appearance:
+        if (e.inning, e.half, e.batter) != (inning, half, batter):
+            continue
+        if (e.code in ("SB", "CS")) if steal else e.is_plate_appearance:
             return index
     return None

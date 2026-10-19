@@ -149,20 +149,31 @@ def render_chart(
                          fill=COLORS["pos_soft" if above else "neg_soft"])
     draw.line([(px(p.x), py(p.wp)) for p in points], fill=COLORS["ink"], width=3, joint="curve")
 
-    last_label_x, flip = -1e9, False
+    placed: list[tuple[float, float, float, float]] = []
+    label_font = fonts.get(16, True)
+    circles = []
     for x, label, tone, ours in markers:
         wp = points[min(max(x, 0), len(points) - 1)].wp
         cx, cy = px(x), py(wp)
         color = COLORS.get(tone, COLORS["even"])
         fill = color if ours else COLORS["surface"]
         draw.ellipse((cx - 9, cy - 9, cx + 9, cy + 9), fill=fill, outline=color, width=3)
-        # Alternate labels above and below when markers crowd together.
-        flip = (not flip) if cx - last_label_x < 44 else False
-        last_label_x = cx
-        if flip:
-            draw.text((cx, cy + 14), label, font=fonts.get(16, True), fill=color, anchor="ma")
-        else:
-            draw.text((cx, cy - 14), label, font=fonts.get(16, True), fill=color, anchor="ms")
+        circles.append((cx - 10, cy - 10, cx + 10, cy + 10))
+    # Put each label in the first free slot: above, below, then further out.
+    for (x, label, tone, ours), circle in zip(markers, circles):
+        cx, cy = (circle[0] + circle[2]) / 2, (circle[1] + circle[3]) / 2
+        w = label_font.getlength(label)
+        box = None
+        for dy in (-26, 12, -46, 32, -66, 52):
+            candidate = (cx - w / 2 - 2, cy + dy, cx + w / 2 + 2, cy + dy + 18)
+            if all(candidate[2] < b[0] or candidate[0] > b[2] or candidate[3] < b[1] or candidate[1] > b[3]
+                   for b in placed + circles):
+                box = candidate
+                break
+        box = box or (cx - w / 2 - 2, cy - 26, cx + w / 2 + 2, cy - 8)
+        placed.append(box)
+        draw.text(((box[0] + box[2]) / 2, box[1]), label, font=label_font,
+                  fill=COLORS.get(tone, COLORS["even"]), anchor="ma")
 
     final = points[-1].wp
     fy = py(final)

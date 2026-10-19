@@ -154,8 +154,15 @@ def key_decisions(rows: list[ScoredRow], limit: int = KEY_DECISIONS) -> list[Sco
     return sorted(top, key=lambda r: r.row.number)
 
 
-def post_text(game: Game, rows: list[ScoredRow]) -> str:
-    """The fixed-format post body, kept within X's length limit."""
+NOTE_LINE = "※結果ではなく判断した時点の勝率で評価"
+
+
+def post_text(game: Game, rows: list[ScoredRow], turning_play: str = "") -> str:
+    """The fixed-format post body, kept within X's length limit.
+
+    ``turning_play`` is the play that swung win probability most (from the
+    game log), shown as 山場 when it fits.
+    """
 
     date = game.properties.get("日付", "")
     try:
@@ -178,15 +185,18 @@ def post_text(game: Game, rows: list[ScoredRow]) -> str:
         )
     else:
         lines.append("両軍とも采配で大きな損得はなし")
-    lines.append("※結果ではなく判断した時点の勝率で評価")
+    turning = f"山場：{turning_play}" if turning_play else ""
+    if turning:
+        lines.append(turning)
+    lines.append(NOTE_LINE)
     lines.append("#采配採点")
-    text = "\n".join(lines)
     # Drop the least essential lines until it fits.
-    for optional in ("※結果ではなく判断した時点の勝率で評価",):
-        if weighted_length(text) <= POST_LIMIT:
+    for optional in (NOTE_LINE, turning):
+        if weighted_length("\n".join(lines)) <= POST_LIMIT:
             break
-        text = text.replace("\n" + optional, "")
-    return text
+        if optional in lines:
+            lines.remove(optional)
+    return "\n".join(lines)
 
 
 def weighted_length(text: str) -> int:
@@ -433,8 +443,18 @@ def render_cards(game: Game, rows: list[ScoredRow]) -> list:
     return [one.image, two.image]
 
 
-def write_post(path: Path, game: Game, rows: list[ScoredRow]) -> tuple[list[Path], str]:
-    """Write ``<note>_1.png`` (``_2.png``) and ``<note>_投稿文.txt`` next to a note."""
+def write_post(
+    path: Path,
+    game: Game,
+    rows: list[ScoredRow],
+    extra_images: list[Path] = (),
+    turning_play: str = "",
+) -> tuple[list[Path], str]:
+    """Write ``<note>_1.png`` (``_2.png``) and ``<note>_投稿文.txt`` next to a note.
+
+    ``extra_images`` (the win-probability chart) are appended to the post's
+    images, after the score card.
+    """
 
     images = render_cards(game, rows)
     for old in path.parent.glob(f"{path.stem}_[0-9].png"):
@@ -444,7 +464,8 @@ def write_post(path: Path, game: Game, rows: list[ScoredRow]) -> tuple[list[Path
         out = path.with_name(f"{path.stem}_{i}.png")
         image.save(out, optimize=True)
         written.append(out)
-    text = post_text(game, rows)
+    written += [image for image in extra_images if image]
+    text = post_text(game, rows, turning_play)
     path.with_name(f"{path.stem}_投稿文.txt").write_text(text + "\n", encoding="utf-8")
     return written, text
 

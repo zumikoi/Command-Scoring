@@ -96,3 +96,8 @@ def test_form_moves_a_struggling_batter_only_slightly(model, table):
     rows_ = score_game(logged, model, SURE_BUNT, formed)
 
     assert rows_[0].value is not None
+
+
+def test_steal_decisions_are_found_at_the_runners_row():
+    assert find_decision(LOG, 0, 1, "top", "甲", steal=True) == 1
+    assert find_decision(LOG, 0, 1, "top", "乙", steal=True) is None
