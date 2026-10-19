@@ -36,6 +36,7 @@ from .abilities import (
     pitcher_ability,
 )
 from .decisions import EVEN_MARGIN
+from . import winprob
 from .events import EventTable
 from .gamelog import (
     LogEntry,
@@ -44,6 +45,7 @@ from .gamelog import (
     batting_line,
     find_decision,
     parse_log,
+    parse_runners as _parse_runners,
     pitching_line,
     steals,
     subtract,
@@ -74,7 +76,6 @@ NOT_TAKEN = {
 #: hits allowed and so on; doubles and triples may be left blank.
 STAT_COLUMNS = ("打席", "安打", "二塁打", "三塁打", "本塁打", "四球", "死球", "三振", "敬遠")
 
-_BASE_CHARS = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2}
 
 
 class GameFormatError(ValueError):
@@ -235,18 +236,10 @@ def _int(value: str, what: str) -> int | None:
 def parse_runners(text: str) -> tuple[bool, bool, bool]:
     """Read 走者 such as ``なし``, ``一塁``, ``一三塁``, ``満塁`` or ``1,3``."""
 
-    text = text.strip()
-    if text in ("", "なし", "-", "—", "0"):
-        return (False, False, False)
-    if "満" in text:
-        return (True, True, True)
-    bases = [False, False, False]
-    for char in text:
-        if char in _BASE_CHARS:
-            bases[_BASE_CHARS[char]] = True
-    if not any(bases):
-        raise GameFormatError(f"走者 could not be read: {text!r}")
-    return tuple(bases)
+    try:
+        return _parse_runners(text)
+    except LogFormatError as error:
+        raise GameFormatError(str(error)) from None
 
 
 def _steals(row: Mapping[str, str], what: str) -> tuple[int, int] | None:
@@ -569,6 +562,7 @@ def render_report(
     source_name: str,
     post_images: list[str] = (),
     post: str = "",
+    extra_sections: list[str] = (),
 ) -> str:
     date = game.properties.get("日付", "")
     title = f"{date} {game.away} vs {game.home}".strip()
@@ -619,6 +613,9 @@ def render_report(
         if best.value < EVEN_MARGIN and worst.value > -EVEN_MARGIN:
             lines.append("- どの判断も差は小さく、采配で大きく損得した場面はありませんでした")
 
+    if extra_sections:
+        lines += ["", *extra_sections]
+
     lines += [
         "",
         "## 判断ごと",
@@ -658,6 +655,31 @@ def render_report(
     return "\n".join(lines)
 
 
+def win_probability_section(
+    path: Path, game: Game, rows: list[ScoredRow], model: WinProbabilityModel
+) -> tuple[list[str], Path | None]:
+    """The report's play-by-play win probability, and its chart when Pillow is there."""
+
+    team, is_home = winprob.focus(game.away, game.home, game.properties.get("視点"))
+    points = winprob.series(game.log, model, is_home)
+    if points is None:
+        return [], None
+    tones = {"好判断": "pos", "疑問": "neg"}
+    markers = [
+        (r.row.log_index, f"#{r.row.number}", tones.get(r.verdict, "even"), r.team == team)
+        for r in rows
+        if r.row.log_index is not None
+    ]
+    chart = path.with_name(f"{path.stem}_勝率.png")
+    try:
+        title = f"{game.properties.get('日付', '')} {game.away} vs {game.home}".strip()
+        winprob.render_chart(points, team, title, markers).save(chart, optimize=True)
+    except SystemExit as error:  # Pillow or a font is missing
+        print(f"勝率のグラフは作れませんでした: {error}")
+        chart = None
+    return winprob.report_section(points, team, is_home, chart.name if chart else None), chart
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: python -m saikaku.game <試合ノート.md>")
@@ -667,7 +689,9 @@ def main() -> None:
         game = parse_game(path.read_text(encoding="utf-8"), events)
     except GameFormatError as error:
         raise SystemExit(f"{path.name}: {error}") from None
-    rows = score_game(game, WinProbabilityModel.load_default(), TacticTable.load(), events)
+    model = WinProbabilityModel.load_default()
+    rows = score_game(game, model, TacticTable.load(), events)
+    extra, chart = win_probability_section(path, game, rows, model)
     images, post = [], ""
     try:
         from .card import write_post
@@ -680,7 +704,8 @@ def main() -> None:
             print(f"投稿用の画像は作れませんでした: {error}")
     out = path.with_name(f"{path.stem}_採点.md")
     out.write_text(
-        render_report(game, rows, path.stem, [p.name for p in images], post), encoding="utf-8"
+        render_report(game, rows, path.stem, [p.name for p in images], post, extra),
+        encoding="utf-8",
     )
     for t in team_totals(game, rows):
         print(f"{t.team}: {t.total:+.1f}pt（{len(t.scored)}判断）")
@@ -688,6 +713,8 @@ def main() -> None:
         print(f"注意: {warning}")
     for image in images:
         print(f"-> {image}")
+    if chart:
+        print(f"-> {chart}")
     print(f"-> {out}")
 
 

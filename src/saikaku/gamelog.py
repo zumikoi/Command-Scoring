@@ -1,7 +1,9 @@
 """The play-by-play section of a game note, and what follows from it.
 
 A note may carry ``## 試合経過``: one row per plate appearance (and per stolen
-base attempt) in order, with 回, 表裏, 打者, 投手 and 結果. From it the scorer
+base attempt, wild pitch, pickoff...) in order, with 回, 表裏, 打者, 投手 and 結果,
+and optionally アウト, 走者 and 得点 as they stood after the play, which is
+what the win-probability chart needs. From it the scorer
 works out, for each decision, everything that had happened before it: each
 player's line so far today, and how many batters the pitcher had faced. It
 also gives each player's line for the whole game, which turns season totals
@@ -17,8 +19,9 @@ from typing import Iterable, Mapping, Sequence
 from .abilities import StatLine
 
 #: 結果 words and what they count as. ``IBB`` is a plate appearance kept out
-#: of form; ``SB``/``CS`` are not plate appearances (the 打者 column names the
-#: runner).
+#: of form. ``SB``, ``CS``, ``ADV`` (a runner moves up without a plate
+#: appearance) and ``PO`` (a runner is put out) are not plate appearances; for
+#: them the 打者 column names the runner.
 RESULTS = {
     "三振": "K", "見逃し三振": "K", "空振り三振": "K", "振り逃げ": "K",
     "四球": "BB", "死球": "HBP", "敬遠": "IBB",
@@ -27,11 +30,43 @@ RESULTS = {
     "凡打": "OUT", "ゴロ": "OUT", "フライ": "OUT", "ライナー": "OUT", "併殺": "OUT",
     "犠打": "OUT", "犠飛": "OUT", "失策": "OUT", "野選": "OUT", "打撃妨害": "OUT",
     "盗塁": "SB", "盗塁死": "CS",
+    "暴投": "ADV", "捕逸": "ADV", "ボーク": "ADV", "進塁": "ADV",
+    "牽制死": "PO", "走塁死": "PO",
 }
+
+_NOT_PLATE_APPEARANCES = ("SB", "CS", "ADV", "PO")
+_BASE_CHARS = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2}
 
 
 class LogFormatError(ValueError):
     """Raised when a 試合経過 row cannot be read."""
+
+
+def parse_runners(text: str) -> tuple[bool, bool, bool]:
+    """Read 走者 such as ``なし``, ``一塁``, ``一三塁``, ``満塁`` or ``1,3``."""
+
+    text = text.strip()
+    if text in ("", "なし", "-", "—", "0"):
+        return (False, False, False)
+    if "満" in text:
+        return (True, True, True)
+    bases = [False, False, False]
+    for char in text:
+        if char in _BASE_CHARS:
+            bases[_BASE_CHARS[char]] = True
+    if not any(bases):
+        raise LogFormatError(f"走者 could not be read: {text!r}")
+    return tuple(bases)
+
+
+@dataclass(frozen=True)
+class After:
+    """The situation once a play is over."""
+
+    outs: int
+    runners: tuple[bool, bool, bool]
+    away_score: int
+    home_score: int
 
 
 @dataclass(frozen=True)
@@ -41,6 +76,7 @@ class LogEntry:
     batter: str
     pitcher: str
     result: str
+    after: After | None = None
 
     @property
     def code(self) -> str:
@@ -48,7 +84,7 @@ class LogEntry:
 
     @property
     def is_plate_appearance(self) -> bool:
-        return self.code not in ("SB", "CS")
+        return self.code not in _NOT_PLATE_APPEARANCES
 
 
 def parse_log(rows: Iterable[Mapping[str, str]]) -> tuple[LogEntry, ...]:
@@ -67,8 +103,21 @@ def parse_log(rows: Iterable[Mapping[str, str]]) -> tuple[LogEntry, ...]:
         except ValueError:
             raise LogFormatError(f"試合経過 {number}行目: 回は数字で書いてください") from None
         entries.append(LogEntry(inning, half, row.get("打者", "").strip(),
-                                row.get("投手", "").strip(), result))
+                                row.get("投手", "").strip(), result, _after(row, number)))
     return tuple(entries)
+
+
+def _after(row: Mapping[str, str], number: int) -> After | None:
+    outs, runners, score = (row.get(k, "").strip() for k in ("アウト", "走者", "得点"))
+    if not (outs or score):
+        return None
+    try:
+        away, home = (int(x) for x in score.replace("－", "-").split("-"))
+        return After(int(outs), parse_runners(runners), away, home)
+    except (ValueError, LogFormatError):
+        raise LogFormatError(
+            f"試合経過 {number}行目: プレー後のアウト・走者・得点（例 2・一三塁・3-1）が読めません"
+        ) from None
 
 
 def _line(codes: Counter[str], plate_appearances: int, split: bool) -> StatLine:
@@ -97,7 +146,7 @@ def pitching_line(entries: Sequence[LogEntry], name: str) -> StatLine:
 
 
 def steals(entries: Sequence[LogEntry], name: str) -> tuple[int, int]:
-    codes = Counter(e.code for e in entries if e.batter == name and not e.is_plate_appearance)
+    codes = Counter(e.code for e in entries if e.batter == name)
     return codes["SB"], codes["CS"]
 
 
