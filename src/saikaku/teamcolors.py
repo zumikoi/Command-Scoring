@@ -1,13 +1,18 @@
 """Team colours for the post images.
 
-A good call is drawn in the deciding team's colour and a poor one in its
-complement (hue turned half way round), so the two teams' calls never share
-a colour. Even calls stay grey. Colours are darkened until they read as text
-on the light background, which matters for pale ones such as yellow.
+Colour says *whose* call it was, never whether it was good: every call of a
+team is drawn in that team's colour, and good versus poor is carried by form
+(bars pointing right or left, a filled versus an outlined verdict badge, a
+solid versus a hollow marker). That keeps the images readable without a
+second, competing colour per team, and for readers who see colour
+differently. Even calls are grey.
 
-The hex values are approximations of each club's main colour, chosen so that
-clubs sharing a hue (Chunichi and DeNA are both blue) still differ in
-lightness. Adjust them here.
+Two teams whose colours sit close on the colour wheel (Chunichi and DeNA are
+both blue) are told apart by lightness: the followed team keeps its colour
+and the other is moved to a clearly lighter tone. Every colour is darkened
+until it reads as text on the light background.
+
+The hex values approximate each club's main colour; adjust them here.
 """
 
 from __future__ import annotations
@@ -15,8 +20,8 @@ from __future__ import annotations
 import colorsys
 
 TEAM_COLORS = {
-    "中日": "#002E8A",       # deep Dragons blue
-    "DeNA": "#0091D7",       # bright Yokohama blue
+    "中日": "#0B3D91",       # Dragons blue (deep)
+    "DeNA": "#0071BC",
     "巨人": "#F97709",
     "阪神": "#E8B800",
     "広島": "#D7000F",
@@ -32,10 +37,11 @@ TEAM_COLORS = {
 BACKGROUND = "#F7F6F2"
 GREY = "#8A867B"
 GREY_SOFT = "#ECEAE4"
-#: Default colours for a team not in the table.
-FALLBACK = {"pos": "#1B7A55", "neg": "#B4432B"}
+FALLBACK = "#4A5560"
 #: Contrast against the background needed for coloured numbers and labels.
 MIN_CONTRAST = 3.0
+#: Hues closer than this (in turns of the wheel) count as the same family.
+SAME_FAMILY = 40 / 360
 
 
 def _rgb(hex_color: str) -> tuple[float, float, float]:
@@ -66,42 +72,52 @@ def readable(hex_color: str) -> str:
     h, l, s = colorsys.rgb_to_hls(*_rgb(hex_color))
     color = hex_color
     while contrast(color) < MIN_CONTRAST and l > 0.05:
-        l -= 0.03
+        l -= 0.02
         color = _hex(colorsys.hls_to_rgb(h, l, s))
     return color
 
 
-def complement(hex_color: str) -> str:
-    """The colour on the other side of the colour wheel, at the same lightness.
+def soft(hex_color: str, amount: float = 0.84) -> str:
+    """A pale tint of a colour, for filled areas."""
 
-    Near-grey colours have no meaningful opposite, so they get a red instead.
-    """
+    w = _rgb(BACKGROUND)
+    return _hex(tuple(c + (wc - c) * amount for c, wc in zip(_rgb(hex_color), w)))
+
+
+def _same_family(a: str, b: str) -> bool:
+    ha, la, sa = colorsys.rgb_to_hls(*_rgb(a))
+    hb, lb, sb = colorsys.rgb_to_hls(*_rgb(b))
+    if sa < 0.15 or sb < 0.15:  # greys and blacks: compare lightness only
+        return abs(la - lb) < 0.2
+    gap = abs(ha - hb)
+    return min(gap, 1 - gap) < SAME_FAMILY
+
+
+def _lighter(hex_color: str) -> str:
+    """The same hue at a clearly lighter, still readable tone."""
 
     h, l, s = colorsys.rgb_to_hls(*_rgb(hex_color))
-    if s < 0.15:
-        return FALLBACK["neg"]
-    return _hex(colorsys.hls_to_rgb((h + 0.5) % 1.0, l, s))
+    if s < 0.15:  # a grey or black stays neutral, just lighter
+        return _hex(colorsys.hls_to_rgb(h, max(l, 0.45), s))
+    return _hex(colorsys.hls_to_rgb(h, max(l, 0.47), max(s, 0.85)))
 
 
-def soft(hex_color: str, amount: float = 0.82) -> str:
-    """A pale tint of a colour, for pills and filled areas."""
+def colors(team: str) -> dict[str, str]:
+    """One team's colours: ``main`` for marks and text, ``soft`` for areas."""
 
-    r, g, b = _rgb(hex_color)
-    w = _rgb(BACKGROUND)
-    return _hex(tuple(c + (wc - c) * amount for c, wc in zip((r, g, b), w)))
+    main = readable(TEAM_COLORS.get(team, FALLBACK))
+    return {"main": main, "soft": soft(main)}
 
 
-def palette(team: str) -> dict[str, str]:
-    """Colours for one team: pos/neg (and their soft tints) and even."""
+def game_colors(followed: str, other: str) -> dict[str, dict[str, str]]:
+    """Colours for both teams of one game, kept apart from each other."""
 
-    base = TEAM_COLORS.get(team)
-    pos = readable(base) if base else FALLBACK["pos"]
-    neg = readable(complement(base)) if base else FALLBACK["neg"]
+    first = readable(TEAM_COLORS.get(followed, FALLBACK))
+    second = TEAM_COLORS.get(other, FALLBACK)
+    if _same_family(first, second):
+        second = _lighter(second)
+    second = readable(second)
     return {
-        "pos": pos,
-        "neg": neg,
-        "even": GREY,
-        "pos_soft": soft(pos),
-        "neg_soft": soft(neg),
-        "even_soft": GREY_SOFT,
+        followed: {"main": first, "soft": soft(first)},
+        other: {"main": second, "soft": soft(second)},
     }

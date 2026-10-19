@@ -105,13 +105,15 @@ def render_chart(
 
     ``markers`` are (x, label, tone, deciding_team) for decisions, placed
     before the play they preceded; tone is "pos", "neg" or "even" from the
-    deciding team's side, drawn in that team's colours (see
-    :mod:`saikaku.teamcolors`). The opponent's decisions are drawn hollow.
-    The area above 50% is tinted in the followed team's colour, below it in
-    the opponent's.
+    deciding team's side. Colour shows the team (see :mod:`saikaku.teamcolors`);
+    a good call is a filled circle, a poor one a hollow ring, an even one a
+    small grey dot. The area above 50% is tinted in the followed team's
+    colour, below it in the opponent's.
     """
 
-    from .teamcolors import palette
+    from .teamcolors import GREY, game_colors
+
+    palette = game_colors(team, opponent) if opponent else game_colors(team, "")
 
     from .card import COLORS, Fonts, _pillow  # Pillow is optional
 
@@ -152,7 +154,7 @@ def render_chart(
         for wp_a, wp_b, x_a, x_b in ((a.wp, b.wp, px(a.x), px(b.x)),):
             above = (wp_a + wp_b) / 2 >= 0.5
             draw.polygon([(x_a, half_line), (x_a, py(wp_a)), (x_b, py(wp_b)), (x_b, half_line)],
-                         fill=palette(team if above else opponent)["pos_soft"])
+                         fill=palette[team if above else opponent]["soft"])
     draw.line([(px(p.x), py(p.wp)) for p in points], fill=COLORS["ink"], width=3, joint="curve")
 
     placed: list[tuple[float, float, float, float]] = []
@@ -161,9 +163,13 @@ def render_chart(
     for x, label, tone, deciding in markers:
         wp = points[min(max(x, 0), len(points) - 1)].wp
         cx, cy = px(x), py(wp)
-        color = palette(deciding)[tone]
-        fill = color if deciding == team else COLORS["surface"]
-        draw.ellipse((cx - 9, cy - 9, cx + 9, cy + 9), fill=fill, outline=color, width=3)
+        color = palette.get(deciding, palette[team])["main"]
+        if tone == "even":
+            draw.ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=GREY, outline=COLORS["surface"], width=2)
+        elif tone == "pos":
+            draw.ellipse((cx - 10, cy - 10, cx + 10, cy + 10), fill=color, outline=COLORS["surface"], width=2)
+        else:
+            draw.ellipse((cx - 10, cy - 10, cx + 10, cy + 10), fill=COLORS["surface"], outline=color, width=4)
         circles.append((cx - 10, cy - 10, cx + 10, cy + 10))
     # Put each label in the first free slot: above, below, then further out.
     for (x, label, tone, deciding), circle in zip(markers, circles):
@@ -178,8 +184,9 @@ def render_chart(
                 break
         box = box or (cx - w / 2 - 2, cy - 26, cx + w / 2 + 2, cy - 8)
         placed.append(box)
+        label_color = GREY if tone == "even" else palette.get(deciding, palette[team])["main"]
         draw.text(((box[0] + box[2]) / 2, box[1]), label, font=label_font,
-                  fill=palette(deciding)[tone], anchor="ma")
+                  fill=label_color, anchor="ma")
 
     final = points[-1].wp
     fy = py(final)
@@ -190,20 +197,24 @@ def render_chart(
 
     legend_y = height - bottom + 44
     x0 = left
-    legend_font = fonts.get(17)
-    for name, hollow in ((team, False), (opponent, True)):
+    legend_font, bold_font = fonts.get(17), fonts.get(17, True)
+    for name in (team, opponent):
         if not name:
             continue
-        colors = palette(name)
-        draw.text((x0, legend_y), f"{name}の采配", font=fonts.get(17, True), fill=colors["pos"], anchor="lm")
-        x0 += fonts.get(17, True).getlength(f"{name}の采配") + 12
-        for kind, word in (("pos", "好判断"), ("neg", "疑問")):
-            fill = COLORS["surface"] if hollow else colors[kind]
-            draw.ellipse((x0, legend_y - 7, x0 + 14, legend_y + 7), fill=fill, outline=colors[kind], width=3)
-            draw.text((x0 + 20, legend_y), word, font=legend_font, fill=COLORS["muted"], anchor="lm")
-            x0 += 20 + legend_font.getlength(word) + 14
-        x0 += 22
-    draw.text((x0, legend_y), "灰は互角", font=legend_font, fill=COLORS["muted"], anchor="lm")
+        main = palette[name]["main"]
+        draw.rounded_rectangle((x0, legend_y - 8, x0 + 16, legend_y + 8), radius=3, fill=main)
+        draw.text((x0 + 22, legend_y), name, font=bold_font, fill=main, anchor="lm")
+        x0 += 22 + bold_font.getlength(name) + 22
+    sample = COLORS["ink"]
+    for shape, word in (("filled", "好判断"), ("ring", "疑問"), ("dot", "互角")):
+        if shape == "filled":
+            draw.ellipse((x0, legend_y - 8, x0 + 16, legend_y + 8), fill=sample)
+        elif shape == "ring":
+            draw.ellipse((x0, legend_y - 8, x0 + 16, legend_y + 8), fill=COLORS["surface"], outline=sample, width=3)
+        else:
+            draw.ellipse((x0 + 3, legend_y - 5, x0 + 13, legend_y + 5), fill=GREY)
+        draw.text((x0 + 22, legend_y), word, font=legend_font, fill=COLORS["muted"], anchor="lm")
+        x0 += 22 + legend_font.getlength(word) + 18
     note = "両チームを平均的な戦力とした勝率。得点の起こりやすさはMLB（Retrosheet 2022〜24）から推定。"
     draw.text((left, height - 46), note, font=fonts.get(16), fill=COLORS["muted"])
     attribution = ("The information used here was obtained free of charge from and is copyrighted by "

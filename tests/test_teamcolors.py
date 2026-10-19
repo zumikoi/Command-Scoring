@@ -1,28 +1,26 @@
 import pytest
 
-from saikaku.teamcolors import MIN_CONTRAST, TEAM_COLORS, complement, contrast, palette
+from saikaku.teamcolors import MIN_CONTRAST, TEAM_COLORS, colors, contrast, game_colors
 
 
 @pytest.mark.parametrize("team", list(TEAM_COLORS))
 def test_every_team_reads_on_the_background(team):
-    colors = palette(team)
-
-    assert contrast(colors["pos"]) >= MIN_CONTRAST
-    assert contrast(colors["neg"]) >= MIN_CONTRAST
-    assert colors["pos"] != colors["neg"]
+    assert contrast(colors(team)["main"]) >= MIN_CONTRAST
 
 
-def test_chunichi_and_dena_do_not_share_colours():
-    chunichi, dena = palette("中日"), palette("DeNA")
+@pytest.mark.parametrize("other", [t for t in TEAM_COLORS if t != "中日"])
+def test_chunichi_and_every_opponent_get_different_readable_colours(other):
+    pair = game_colors("中日", other)
 
-    assert {chunichi["pos"], chunichi["neg"]}.isdisjoint({dena["pos"], dena["neg"]})
-
-
-def test_complement_turns_blue_toward_orange():
-    r, g, b = (int(complement("#0091D7")[i:i + 2], 16) for i in (1, 3, 5))
-
-    assert r > b
+    assert pair["中日"]["main"] != pair[other]["main"]
+    assert contrast(pair[other]["main"]) >= MIN_CONTRAST
 
 
-def test_unknown_teams_fall_back_to_green_and_red():
-    assert palette("未知の球団")["pos"] == "#1B7A55"
+def test_a_same_hue_opponent_is_moved_to_a_lighter_tone():
+    pair = game_colors("中日", "DeNA")
+
+    assert contrast(pair["DeNA"]["main"]) < contrast(pair["中日"]["main"]) - 3
+
+
+def test_unknown_teams_get_a_neutral_colour():
+    assert contrast(colors("未知の球団")["main"]) >= MIN_CONTRAST
