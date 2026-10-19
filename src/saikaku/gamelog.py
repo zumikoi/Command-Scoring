@@ -170,7 +170,9 @@ def subtract(season: StatLine, game: StatLine, what: str) -> StatLine:
             so=season.so - game.so,
             doubles=minus(season.doubles, game.doubles),
             triples=minus(season.triples, game.triples),
-            ibb=season.ibb - game.ibb,
+            # Season lines without an intentional-walk count (monthly splits)
+            # still hold this game's in their walks; never go below zero.
+            ibb=max(season.ibb - game.ibb, 0),
         )
     except ValueError as error:
         raise LogFormatError(f"{what}: 成績から試合経過を引くと矛盾します（{error}）") from None

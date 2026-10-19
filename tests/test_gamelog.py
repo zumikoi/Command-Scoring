@@ -101,3 +101,12 @@ def test_form_moves_a_struggling_batter_only_slightly(model, table):
 def test_steal_decisions_are_found_at_the_runners_row():
     assert find_decision(LOG, 0, 1, "top", "甲", steal=True) == 1
     assert find_decision(LOG, 0, 1, "top", "乙", steal=True) is None
+
+
+def test_subtracting_works_when_the_season_line_has_no_intentional_walk_count():
+    season = StatLine(pa=50, h=10, hr=1, bb=8, hbp=0, so=12)  # IBB unknown, kept as 0
+    game = pitching_line(LOG, "丁")                             # includes one IBB
+
+    before = subtract(season, game, "丁")
+
+    assert (before.bb, before.ibb) == (7, 0)
